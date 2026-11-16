@@ -4,6 +4,8 @@ description: "Slimca 本地数据库层：Drift schema v1（21 张表）+ 连接
 version: 0.0.1
 homepage:
 
+publish_to: none
+
 environment:
   sdk: ^3.8.0
   flutter: ">=1.17.0"
@@ -11,6 +13,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # §10.4：仓库接口/领域实体在 core_domain，Drift 实现在 core_db——
+  # EntryRepository/EntryLineRepository 的实现与 HLC 发戳均依赖领域层。
+  core_domain:
+    path: ../core_domain
   # §10.1 数据层选型 Drift 2.x：类型安全 + SQL 聚合（day_summary 投影）
   # + reactive stream 直驱仪表盘。
   drift: ^2.20.0

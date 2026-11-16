@@ -1,18 +1,28 @@
+import 'dart:ui' show clampDouble;
+
+import 'package:core_domain/core_domain.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:ui_kit/ui_kit.dart';
 
-import '../../app/theme.dart';
+import '../../app/providers.dart';
+import '../../common/format.dart';
+import '../capture/capture_page.dart';
 import 'dashboard_state.dart';
 
-/// 日期仪表盘（§3.2，W2 主线的骨架版：日期大字 + 周历条 + 卡片墙空态，§11 W2）。
+/// 日期仪表盘（§3.2；W2：卡片墙由明细行 reactive stream 实时驱动——
+/// 「手动记一笔→仪表盘环/支出卡即时更新」验收线，§11 W2）。
 ///
 /// 设计决策：
 /// - 本页是**唯一首页**（§4.1 原则 1、§3.2「唯一首页」），无第二个首页；
-/// - 空态即最终形态的占位：卡片墙结构（热量环/支出/运动/待办/存钱）与
-///   §3.2 卡片墙清单一一对应，W2 起由 day_summary 快照直出填数（§5.6 ⑬，
-///   冷启动首帧零业务查询、无 spinner，§2.3 步 0 / §3.2 快照直出）；
-/// - 语义色暂用 ColorScheme 角色，SlimcaTheme 语义 token（kcalIn/moneyOut 等，
-///   §8.2）随 ui_kit 落地后整体替换，替换点集中在各卡片 build 内。
+/// - 数据源=[dashboardDayProvider]/[dashboardTodosProvider]/[dailyBudgetProvider]：
+///   聚合从明细行实时重建（§6.1 原则 3），loading/error 一律渲染零值空态——
+///   页面永不出现 spinner（§2.3 步 0）；day_summary 投影直读（§5.6⑬ 首帧
+///   直出、零业务查询）随投影 v1 落库接入，provider 签名不变；
+/// - 冷启动卡片墙按 §9.3#1 级联上浮（SlimcaStaggerItem + cascadeInterval
+///   token），切日过渡走 AnimatedSwitcher 共享轴（§9.3#2，§9.2 dur.l）；
+/// - 语义色统一取 SlimcaTheme token（kcalIn/moneyOut/surfaceCard 等，§8.2
+///   三层架构：组件层禁止裸色值）。
 class TodayDashboardPage extends ConsumerStatefulWidget {
   const TodayDashboardPage({super.key});
 
@@ -36,8 +46,8 @@ class _TodayDashboardPageState extends ConsumerState<TodayDashboardPage> {
             const SizedBox(height: 12),
             _WeekStrip(selected: selectedDate),
             const SizedBox(height: 20),
-            // 左右滑切日：共享轴转场 280ms（§3.2、§9.2 dur.l、§9.3 转场 #2——
-            // W2 起补方向感知与卡片 FLIP 位置保持）。
+            // 左右滑切日：共享轴转场 280ms（§3.2、§9.3 转场 #2——方向感知与
+            // 卡片 FLIP 位置保持随转场 #2 完整实现接入）。
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onHorizontalDragEnd: (details) {
@@ -48,22 +58,15 @@ class _TodayDashboardPageState extends ConsumerState<TodayDashboardPage> {
                   ref.read(selectedDateProvider.notifier).shiftByDays(1);
                 }
               },
-              child: AnimatedSwitcher(
-                duration: sharedAxisTransitionDuration(context),
-                switchInCurve: Curves.easeOutCubic,
-                switchOutCurve: Curves.easeInCubic,
-                transitionBuilder: (child, animation) => FadeTransition(
-                  opacity: animation,
-                  child: SlideTransition(
-                    position: Tween<Offset>(
-                      begin: const Offset(0, 0.04),
-                      end: Offset.zero,
-                    ).animate(animation),
-                    child: child,
-                  ),
+              // Widget 级共享轴切换器（§9.3#2「AnimatedSwitcher + layout delta」
+              // 手段的现成语义组件）：以日期为 key 换 child 即触发；时长/曲线/
+              // 降级全部取 MotionConfig token，本页不写裸时长（§8.2/§9.2）。
+              // 卡片 FLIP 位置保持（layout delta）随转场 #2 完整实现接入。
+              child: SlimcaSharedAxisSwitcher(
+                child: _CardWall(
+                  key: wallKey,
+                  date: formatCalendarDay(selectedDate),
                 ),
-                // 以日期为 key：切日触发共享轴式过渡，卡片墙不整体闪烁重建。
-                child: _CardWall(key: wallKey),
               ),
             ),
           ],
@@ -85,14 +88,15 @@ class _DateHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final weekdays = const ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: const Duration(milliseconds: 400), // §9.3 转场 #1 上限
       curve: Curves.easeOutBack,
       builder: (context, t, child) => Opacity(
-        opacity: t.clamp(0.0, 1.0),
+        // easeOutBack 会过冲 >1：透明度必须钳到 [0,1]（Flutter 调试断言）。
+        opacity: clampDouble(t, 0.0, 1.0),
         child: Transform.scale(scale: 0.92 + 0.08 * t, child: child),
       ),
       child: Row(
@@ -145,7 +149,7 @@ class _WeekStrip extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(12),
                 onTap: () => ref.read(selectedDateProvider.notifier).select(day),
                 child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180), // §9.2 dur.m
+                  duration: MotionConfig.of(context).durM, // §9.2 dur.m
                   curve: Curves.easeOutCubic,
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   decoration: BoxDecoration(
@@ -195,33 +199,48 @@ class _WeekStrip extends ConsumerWidget {
   }
 }
 
-/// 卡片墙空态（§3.2 卡片墙：热量环/支出/运动/待办/存钱进度）。
+/// 卡片墙（§3.2：热量环/支出/运动/待办/存钱进度 + 今日记录）。
 ///
-/// W1 骨架为全零空态 + 「记录后自动更新」提示；W2 接入 day_summary 后
-/// 本组件改为消费投影快照（首帧直出、零业务查询，§3.2 快照直出）。
-/// 卡片墙整体上浮（§9.3 转场 #1 的 80ms 级联 stagger 于 W2 接入
-/// MotionConfig token 后逐卡展开，骨架期整体淡入）。
-class _CardWall extends StatelessWidget {
-  const _CardWall({super.key});
+/// - 数据：明细行 join 流实时聚合（dashboardDayProvider，§6.1 原则 3）；
+/// - loading/error 渲染零值空态（无 spinner，§2.3 步 0）；
+/// - 每卡按 §9.3#1 级联上浮（SlimcaStaggerItem；切日随墙重建重播，W2 口径）。
+class _CardWall extends ConsumerWidget {
+  const _CardWall({super.key, required this.date});
+
+  /// 归属日 `yyyy-MM-dd`（§5.1）。
+  final String date;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final day = ref.watch(dashboardDayProvider(date)).value ??
+        const DashboardDay.zero();
+    final todos = ref.watch(dashboardTodosProvider(date)).value ??
+        DashboardTodoCounts.empty;
+    final budget = ref.watch(dailyBudgetProvider(date)).value ?? 0;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: const [
-        _CalorieRingCard(),
-        SizedBox(height: 12),
-        // 支出/运动两卡等高并排：Row 用 stretch 拉齐双卡高度。注意本卡片墙
-        // 位于 ListView（子项高度无界）内，Row 直接 stretch 会拿到无限高度
-        // 而布局崩溃（BoxConstraints forces an infinite height），故用
-        // IntrinsicHeight 先取双卡固有高度作为有界约束（§3.2 卡片墙）。
-        _SpendBurnRow(),
-        SizedBox(height: 12),
-        _TodoCard(),
-        SizedBox(height: 12),
-        _SavingsCard(),
-        SizedBox(height: 16),
-        _EmptyHint(),
+      children: [
+        SlimcaStaggerItem(
+          index: 0,
+          child: _CalorieRingCard(day: day, budget: budget),
+        ),
+        const SizedBox(height: 12),
+        // 支出/运动两卡等高并排：本卡片墙位于 ListView（子项高度无界）内，
+        // Row 直接 stretch 会拿到无限高度而布局崩溃，故 IntrinsicHeight 先取
+        // 双卡固有高度作为有界约束（§3.2 卡片墙）。
+        SlimcaStaggerItem(index: 1, child: _SpendBurnRow(day: day)),
+        const SizedBox(height: 12),
+        SlimcaStaggerItem(index: 2, child: _TodoCard(todos: todos)),
+        const SizedBox(height: 12),
+        SlimcaStaggerItem(index: 3, child: const _SavingsCard()),
+        const SizedBox(height: 12),
+        SlimcaStaggerItem(index: 4, child: _TodayEntriesCard(day: day)),
+        const SizedBox(height: 16),
+        SlimcaStaggerItem(
+          index: 5,
+          child: day.entries.isEmpty ? const _EmptyHint() : const SizedBox.shrink(),
+        ),
       ],
     );
   }
@@ -229,17 +248,19 @@ class _CardWall extends StatelessWidget {
 
 /// 支出/运动双卡行：IntrinsicHeight 内 stretch，保证两卡等高（§3.2）。
 class _SpendBurnRow extends StatelessWidget {
-  const _SpendBurnRow();
+  const _SpendBurnRow({required this.day});
+
+  final DashboardDay day;
 
   @override
   Widget build(BuildContext context) {
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: const [
-          Expanded(child: _SpendCard()),
-          SizedBox(width: 12),
-          Expanded(child: _BurnCard()),
+        children: [
+          Expanded(child: _SpendCard(day: day)),
+          const SizedBox(width: 12),
+          Expanded(child: _BurnCard(day: day)),
         ],
       ),
     );
@@ -248,39 +269,56 @@ class _SpendBurnRow extends StatelessWidget {
 
 /// 热量环卡：摄入/消耗/净 + 预算余（§3.2 卡片墙第 1 项）。
 ///
-/// 空态：环为零进度、数字为 0、预算未设置。环的 sweep 填充动效与
-/// 「今日还能吃」滚动数字随 W2 落库链路接入（§9.3 转场 #4/#5）。
+/// 预算已设置（kcal 账本 daily 预算，§5.4⑥）→ ui_kit 语义组件
+/// SlimcaCalorieRing（spring.soft sweep 推进，§9.2/§9.3#4）；预算未设置
+/// （W5-6 才有每日目标 UI，§11）→ 零进度轨道环 + 净热量数字，不用满环
+/// 假装超支（§3.2「超支/超额即时反馈」语义诚实）。
 class _CalorieRingCard extends StatelessWidget {
-  const _CalorieRingCard();
+  const _CalorieRingCard({required this.day, required this.budget});
+
+  final DashboardDay day;
+
+  /// kcal 每日目标；0=未设置（§5.4⑥ daily 预算）。
+  final int budget;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    final center = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('${day.netKcal}', style: textTheme.titleLarge),
+        Text('净 kcal', style: textTheme.labelSmall),
+      ],
+    );
 
-    return _DashboardCard(
-      child: Row(
-        children: [
-          SizedBox(
+    final Widget ring = budget > 0
+        ? SlimcaCalorieRing(
+            kcalIn: day.kcalIn,
+            kcalOut: day.kcalOut,
+            budget: budget,
+            size: 88,
+            strokeWidth: 8,
+            center: center,
+          )
+        : SizedBox(
             width: 88,
             height: 88,
             child: CustomPaint(
               painter: _ProgressRingPainter(
                 trackColor: cs.surfaceContainerHighest,
                 progressColor: cs.primary,
-                progress: 0, // 空态零进度；W2 起由 day_summary 驱动（§5.6 ⑬）
+                progress: 0, // 预算未设置：不推 sweep，仅轨道（§3.2）
               ),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('0', style: textTheme.titleLarge),
-                    Text('净 kcal', style: textTheme.labelSmall),
-                  ],
-                ),
-              ),
+              child: Center(child: center),
             ),
-          ),
+          );
+
+    return _DashboardCard(
+      child: Row(
+        children: [
+          ring,
           const SizedBox(width: 16),
           Expanded(
             child: Column(
@@ -288,9 +326,15 @@ class _CalorieRingCard extends StatelessWidget {
               children: [
                 Text('热量', style: textTheme.titleMedium),
                 const SizedBox(height: 6),
-                _MetricLine(label: '摄入', value: '0 kcal'),
-                _MetricLine(label: '消耗', value: '0 kcal'),
-                _MetricLine(label: '预算', value: '未设置'),
+                _MetricLine(label: '摄入', value: '${day.kcalIn} kcal'),
+                _MetricLine(label: '消耗', value: '${day.kcalOut} kcal'),
+                _MetricLine(
+                  label: '预算',
+                  value: budget > 0
+                      // 预算余 = 目标 − 净（kcal 账本：吃=支出、运动=再入账，§2.1③）
+                      ? '余 ${budget - day.netKcal} kcal'
+                      : '未设置',
+                ),
               ],
             ),
           ),
@@ -302,7 +346,9 @@ class _CalorieRingCard extends StatelessWidget {
 
 /// 今日支出卡：支出与预算余（§3.2 卡片墙第 2 项；暖橘=金额，§8.2）。
 class _SpendCard extends StatelessWidget {
-  const _SpendCard();
+  const _SpendCard({required this.day});
+
+  final DashboardDay day;
 
   @override
   Widget build(BuildContext context) {
@@ -313,7 +359,7 @@ class _SpendCard extends StatelessWidget {
         children: [
           Text('今日支出', style: textTheme.labelMedium),
           const SizedBox(height: 8),
-          Text('¥0.00', style: textTheme.headlineSmall),
+          Text(yuanFromMinor(day.spendMinor), style: textTheme.headlineSmall),
           const SizedBox(height: 4),
           Text(
             '预算余 —（先去设置每日目标）',
@@ -329,7 +375,9 @@ class _SpendCard extends StatelessWidget {
 
 /// 运动条卡：MET 估算消耗（§3.5 手动记录；±20% 口径标注，§3.5 误差口径）。
 class _BurnCard extends StatelessWidget {
-  const _BurnCard();
+  const _BurnCard({required this.day});
+
+  final DashboardDay day;
 
   @override
   Widget build(BuildContext context) {
@@ -340,7 +388,7 @@ class _BurnCard extends StatelessWidget {
         children: [
           Text('今日消耗', style: textTheme.labelMedium),
           const SizedBox(height: 8),
-          Text('0 kcal', style: textTheme.headlineSmall),
+          Text('${day.kcalOut} kcal', style: textTheme.headlineSmall),
           const SizedBox(height: 4),
           Text(
             '手动记录运动（MET 估算 ±20%）',
@@ -356,7 +404,9 @@ class _BurnCard extends StatelessWidget {
 
 /// 待办卡：3 条预览（§3.2 卡片墙第 4 项、§3.6 待办基础）。
 class _TodoCard extends StatelessWidget {
-  const _TodoCard();
+  const _TodoCard({required this.todos});
+
+  final DashboardTodoCounts todos;
 
   @override
   Widget build(BuildContext context) {
@@ -370,7 +420,7 @@ class _TodoCard extends StatelessWidget {
             children: [
               Text('待办', style: textTheme.titleMedium),
               Text(
-                '0/0',
+                '${todos.done}/${todos.total}',
                 style: textTheme.labelMedium?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -379,7 +429,9 @@ class _TodoCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '今日暂无待办。完成待办将计入当日全貌。',
+            todos.total == 0
+                ? '今日暂无待办。完成待办将计入当日全貌。'
+                : '${todos.done} 项已完成，共 ${todos.total} 项（§5.5⑩）',
             style: textTheme.bodyMedium?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
@@ -419,6 +471,103 @@ class _SavingsCard extends StatelessWidget {
   }
 }
 
+/// 今日记录卡（§11 W2 手动记账全链路的流水反馈面）。
+///
+/// - 点条目 → 录入抽屉编辑态（预填+修正链落库，§6.5 金额不可变）；
+/// - 删除 → 软删墓碑（§5.1/§6.5），聚合流即时重发（明细流直驱）；
+/// - 完整流水列表/分类/预算入口在 /ledger（§4.3，W2+ 逐条接入）。
+class _TodayEntriesCard extends ConsumerWidget {
+  const _TodayEntriesCard({required this.day});
+
+  final DashboardDay day;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (day.entries.isEmpty) {
+      return const SizedBox.shrink(); // 空日不渲染（§2.3 零等待空屏）
+    }
+    final textTheme = Theme.of(context).textTheme;
+    return _DashboardCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('今日记录', style: textTheme.titleMedium),
+          const SizedBox(height: 4),
+          for (final view in day.entries) _EntryTile(view: view),
+        ],
+      ),
+    );
+  }
+}
+
+/// 单条记录行：kind 图标 + 标题 + 金额/热量摘要 + 编辑/删除。
+class _EntryTile extends ConsumerWidget {
+  const _EntryTile({required this.view});
+
+  final DashboardEntryView view;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final textTheme = Theme.of(context).textTheme;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      leading: Icon(
+        _kindIcon(view.kind),
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+      title: Text(
+        view.title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: textTheme.bodyMedium,
+      ),
+      subtitle: Text(
+        _summaryOf(view),
+        style: textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+      // 编辑：弹簧抽屉预填原事件；保存走修正链（§6.5 金额不可变→correction 行）。
+      onTap: () => showSlimcaSpringSheet(
+        context: context,
+        builder: (_) => CapturePage(editEntryId: view.entryId),
+      ),
+      trailing: IconButton(
+        icon: const Icon(Icons.delete_outline),
+        tooltip: '删除（软删墓碑）',
+        // §5.1 删除行/§6.5：软删墓碑拒绝复活；聚合流即时重发。
+        onPressed: () {
+          final clock = ref.read(hlcClockProvider);
+          ref
+              .read(entryRepositoryProvider)
+              .softDelete(view.entryId, hlc: clock.now().format());
+        },
+      ),
+    );
+  }
+
+  String _summaryOf(DashboardEntryView view) {
+    final parts = <String>[];
+    if (view.kcalIn > 0) parts.add('摄入 ${view.kcalIn} kcal');
+    if (view.kcalOut > 0) parts.add('消耗 ${view.kcalOut} kcal');
+    if (view.spendMinor > 0) parts.add(yuanFromMinor(view.spendMinor));
+    if (view.incomeMinor > 0) parts.add('收入 ${yuanFromMinor(view.incomeMinor)}');
+    return parts.isEmpty ? '仅记录描述' : parts.join(' · ');
+  }
+
+  IconData _kindIcon(String kindWire) {
+    return switch (kindWire) {
+      'food' => Icons.restaurant_outlined,
+      'expense' => Icons.payments_outlined,
+      'mixed' => Icons.restaurant_menu_outlined,
+      'fitness' => Icons.fitness_center,
+      'note' => Icons.sticky_note_2_outlined,
+      _ => Icons.edit_note_outlined,
+    };
+  }
+}
+
 /// 空态引导：一句话定位 + 录入入口提示（§1.2、§2.3 步 1）。
 class _EmptyHint extends StatelessWidget {
   const _EmptyHint();
@@ -454,11 +603,10 @@ class _DashboardCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    // §8.2 语义 token：卡片底色取 SlimcaTheme.surfaceCard（三层架构组件层纪律）。
     return DecoratedBox(
-      // W2 起替换为 SlimcaTheme.surfaceCard 语义 token（§8.2）。
       decoration: BoxDecoration(
-        color: cs.surfaceContainerLow,
+        color: context.slimca.surfaceCard,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Padding(
@@ -494,10 +642,10 @@ class _MetricLine extends StatelessWidget {
   }
 }
 
-/// 零依赖进度环：轨道圆 + 进度弧（§9.3 转场 #4 环 sweep 的骨架版绘制器）。
+/// 零依赖进度环：轨道圆 + 进度弧（§9.3 转场 #4 环 sweep 的 W2 降级版）。
 ///
-/// W2 起接入 day_summary 数据与 sweep 弹簧动画（spring.soft，§9.2）；
-/// 绘制保持 CustomPainter，便于替换为 ui_kit 的语义组件（§10.1 动效选型）。
+/// 仅用于「预算未设置」态（W5-6 每日目标接入后统一走 SlimcaCalorieRing
+/// 语义组件；绘制保持 CustomPainter，便于后续替换，§10.1 动效选型）。
 class _ProgressRingPainter extends CustomPainter {
   const _ProgressRingPainter({
     required this.trackColor,
@@ -513,16 +661,16 @@ class _ProgressRingPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final track = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 10
+      ..strokeWidth = 8
       ..color = trackColor;
     final arc = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 10
+      ..strokeWidth = 8
       ..strokeCap = StrokeCap.round
       ..color = progressColor;
 
     final center = size.center(Offset.zero);
-    final radius = (size.shortestSide - 10) / 2;
+    final radius = (size.shortestSide - 8) / 2;
     final rect = Rect.fromCircle(center: center, radius: radius);
 
     canvas.drawCircle(center, radius, track);

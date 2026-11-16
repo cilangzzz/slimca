@@ -8,6 +8,7 @@ library;
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
+import 'dao/default_seed.dart';
 import 'tables/event_tables.dart';
 import 'tables/infra_tables.dart';
 import 'tables/ledger_tables.dart';
@@ -69,6 +70,10 @@ class AppDatabase extends _$AppDatabase {
           // 同步层注意：pull 需按父表→子表依赖序落库（§6.2 per-table 游标）；
           // 物理 GC（墓碑 90 天）需先删子行再删父墓碑（§5.1）。
           await customStatement('PRAGMA foreign_keys = ON');
+          // §5.4/§11.1 W2：空库首次打开 seed 默认数据（幂等）——默认 money
+          // 账本 + 内置 kcal 账本 + 20+ 中文分类 + settings（device_id/
+          // default_ledger_id），详见 dao/default_seed.dart。
+          await seedDefaultData(this);
         },
       );
 }

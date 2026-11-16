@@ -50,6 +50,13 @@ dependencies:
   core_db:
     path: ../../packages/core_db
 
+  # W2 接线直用依赖（core_db 的传递依赖提升为直接依赖，§10.1）：
+  # drift——App 侧 reactive stream 直驱仪表盘（join/watch/事务，§10.1 数据层）；
+  drift: ^2.29.0
+  # uuid——UUIDv7 主键生成（§5.1 应用层生成、时间有序）与 §6.3 device_id
+  # （取 UUIDv7 前 12 位 hex，复用 core_domain Hlc.nodeIdFromUuidV7）。
+  uuid: ^4.6.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

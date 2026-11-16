@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'app/bootstrap.dart';
 import 'app/router.dart';
 import 'app/theme.dart';
 
-void main() {
-  // W1 骨架：无异步初始化（DB/同步引擎 W2+ 接入后再改 async main，§11 W2/W5-6）。
-  runApp(const ProviderScope(child: SlimcaApp()));
+Future<void> main() async {
+  // §11 W2 接线：runApp 前完成异步装配（开库、device_id、内置账本种子），
+  // 以 overrides 注入 ProviderScope——运行期依赖全同步可读、页面零等待
+  // （§2.3 步 0 无 spinner 冷启动；装配细节见 lib/app/bootstrap.dart）。
+  WidgetsFlutterBinding.ensureInitialized();
+  final overrides = await bootstrap();
+  runApp(ProviderScope(overrides: overrides, child: const SlimcaApp()));
 }
 
 /// 应用根：ProviderScope + MaterialApp.router（§10.1 技术选型）。

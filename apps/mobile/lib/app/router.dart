@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:ui_kit/ui_kit.dart';
 
+import '../features/capture/capture_page.dart';
 import '../features/dashboard/today_dashboard_page.dart';
 import '../features/ledger/ledger_page.dart';
 import '../features/plan/plan_page.dart';
@@ -13,9 +15,10 @@ import '../features/settings/settings_page.dart';
 ///   滚动位置（§4.1 原则 3「回退保留滚动位置」、§4.3 实现注记）；
 /// - Tab 结构与命名严格按 §4.2：今天 `/`、账本 `/ledger`、计划 `/plan`、
 ///   我的 `/settings`；中央悬浮「+」为录入抽屉（非路由页面，§4.2 capture）；
-/// - W1 骨架只挂 4 个 Tab 根页面；`/calendar`、`/entry/:id`、`/ledger/*` 等
-///   子路由随 W2+ 逐条接入，接入时路由级转场一律注入自定义
-///   `PageRouteBuilder`（§9.5 工程约束，共享轴/容器变换见 §9.3）。
+/// - W1 骨架挂 4 个 Tab 根页面；W2 起今天 Tab 渲染真仪表盘、中央「+」唤起
+///   录入抽屉；`/calendar`、`/entry/:id`、`/ledger/*` 等子路由随 W2+ 逐条
+///   接入，接入时路由级转场一律注入自定义 `PageRouteBuilder`（§9.5 工程约束，
+///   共享轴/容器变换见 §9.3）。
 final GoRouter slimcaRouter = GoRouter(
   initialLocation: '/',
   routes: [
@@ -76,10 +79,13 @@ class SlimcaShell extends StatelessWidget {
       // IndexedStack 承载各分支导航栈；切 Tab 不重建、保留各自栈内状态。
       body: navigationShell,
       floatingActionButton: FloatingActionButton(
-        // 录入抽屉（写/说/拍三通道 + 最近 chip，§4.2 capture）：弹簧 bottomSheet
-        // 非路由页面。W3-4 由 feature_capture 接入真实现（§11 W3-4 主线），
-        // 骨架期仅占位提示。
-        onPressed: () => _showCapturePlaceholder(context),
+        // 录入抽屉（§4.2 capture 非路由页面语义、任意 Tab 可唤起；§9.3#3
+        // 弹簧 bottomSheet springSnappy 220ms，§2.3 打开到可输入 ≤280ms）。
+        // W2 先通「写」通道手动录入（§11 W2）；说/拍 W3-4/W11-12 接入。
+        onPressed: () => showSlimcaSpringSheet(
+          context: context,
+          builder: (_) => const CapturePage(),
+        ),
         tooltip: '记一件事',
         child: const Icon(Icons.add),
       ),
@@ -112,13 +118,5 @@ class SlimcaShell extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  void _showCapturePlaceholder(BuildContext context) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(content: Text('录入抽屉（写/说/拍）将在 W3-4 接入（§4.2 capture）')),
-      );
   }
 }
