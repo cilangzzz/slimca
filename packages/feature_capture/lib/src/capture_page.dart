@@ -389,13 +389,17 @@ class CapturePage extends ConsumerWidget {
     await _finishSubmit(context, entryId);
   }
 
-  /// 提交成功收尾：回调宿主；无回调时关闭抽屉（§4.3 capture 抽屉语义）。
+  /// 提交成功收尾：回调宿主（纯通知——W7-8 漏斗埋点等，宿主不接管导航）+
+  /// 关闭抽屉（§4.3 capture 抽屉语义：提交成功恒收起回到宿主页）。
   /// 调用方已在 await 后做过 context.mounted 检查。
   Future<void> _finishSubmit(BuildContext context, String entryId) async {
+    // W7-8 集成修复：onSubmitted 是宿主的获取性提交通知（漏斗终点 §12），
+    // 不是抽屉关闭的接管——原先「有回调则 return 不 pop」使 FAB 打开的
+    // 录入抽屉提交后滞留（e2e ⑤ capture_submit 不收起 / 确认卡 pumpAndSettle
+    // 超时）。关闭语义回归页面自身，回调只旁路通知。
     final callback = onSubmitted;
     if (callback != null) {
       callback(entryId);
-      return;
     }
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();

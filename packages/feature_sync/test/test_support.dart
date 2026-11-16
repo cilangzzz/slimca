@@ -55,8 +55,10 @@ class SyncDeviceFixture {
   }) : rng = Random(deviceId.hashCode ^ kHarnessBaseWallMs);
 
   /// 单设备建夹具：开库 → 覆写设备标识 → 组装同步层。
+  /// [backend] 放宽为 [SyncBackend]：W7-8 SupabaseSyncBackend（mock transport）
+  /// 全链路轨道与 InMemory 轨道共用本夹具（§6.7 双轨）。
   static Future<SyncDeviceFixture> open(
-    InMemorySyncBackend backend,
+    SyncBackend backend,
     String deviceId,
     int baseWallMs,
   ) async {
@@ -99,6 +101,21 @@ class SyncDeviceFixture {
       clock: clock,
       listener: (status) => fixture.statuses.add(status),
     );
+    // W7-8 集成收敛注：AppDatabase.beforeOpen 的默认数据 seed（§5.4）在
+    // W7-8「全写路径 outbox 补课」后会把 24 条 seed 行（categories 22 +
+    // ledgers 2，§5.1 同步真值表）同事务入队 sync_outbox——该出网纪律由
+    // core_db 的 outbox_write_path_test / seed_idempotency_test 专属覆盖。
+    // 本夹具只测引擎机制（冲突仲裁/游标/收敛），若保留 seed 出网项：
+    // (a) 各测试的 acked/pending/applied 计数全部偏移 24，掩盖被测语义；
+    // (b) seed 戳经 LocalWriteClock 取**真实墙钟**、与夹具虚拟墙钟（§6.3
+    //     确定性全序纪律）构成两条时间线，首个 syncOnce 的回显 pull 会把
+    //     设备时钟「跳」到真实墙钟，后续编辑在 (physical,counter) 上与
+    //     他端并列、靠 device_id 决胜——LWW/baseRevision 等用例的前提坍塌。
+    // 故开夹具即清空 seed 出网项（走公开 store API，与业务出网同构），
+    // 各测试从「干净 outbox」起步。
+    for (final seedEntry in await fixture.outbox.dequeuePending(limit: 1000)) {
+      await fixture.outbox.drop(seedEntry.id);
+    }
     return fixture;
   }
 
@@ -126,8 +143,8 @@ class SyncDeviceFixture {
   /// pull 落库/游标/回写（§5.6⑱）。
   final DriftSyncLocalStore store;
 
-  /// 共享远端。
-  final InMemorySyncBackend backend;
+  /// 共享远端（W7-8 放宽为抽象类型：InMemory/Supabase-mock 双轨共用夹具）。
+  final SyncBackend backend;
 
   /// 引擎（open 时装配）。
   late final LocalSyncEngine engine;

@@ -11,11 +11,15 @@
 /// 录入 UI 纪律，§10.4）；本文件只做通道编排，不复制任何表单/解析逻辑。
 library;
 
+import 'dart:async';
+
 import 'package:feature_capture/feature_capture.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ui_kit/ui_kit.dart';
 
+import '../../app/providers.dart';
+import '../../telemetry/telemetry.dart';
 import 'voice_capture_panel.dart';
 
 /// 通道切换条测试锚点（写/说/拍）。
@@ -24,7 +28,8 @@ const Key captureChannelVoiceKey = ValueKey('capture_channel_voice');
 const Key captureChannelPhotoKey = ValueKey('capture_channel_photo');
 
 /// 唤起录入通道抽屉（§9.3#3 弹簧 bottomSheet；语义与 showCaptureSheet
-/// 一致——宿主可传 onSubmitted 接管提交完成，缺省自动关闭）。
+/// 一致——onSubmitted 为宿主的提交成功纯通知（W7-8 漏斗埋点），抽屉关闭
+/// 恒由页面自身负责（§4.3 提交成功收起，W7-8 集成修复口径）。
 Future<void> showCaptureChannelsSheet(
   BuildContext context, {
   CaptureSeed seed = const CaptureSeed(),
@@ -79,7 +84,17 @@ class _CaptureChannelsSheetState extends ConsumerState<CaptureChannelsSheet> {
           children: [
             _ChannelBar(
               channel: _channel,
-              onSelected: (channel) => setState(() => _channel = channel),
+              onSelected: (channel) {
+                setState(() => _channel = channel);
+                // W7-8 录入漏斗（§12 验收口径「录入渠道选择」）：写/说选择
+                // 即记（props 仅通道枚举标量，§3.9 隐私口径；拍=P1 未启用）。
+                unawaited(ref
+                    .read(telemetryServiceProvider)
+                    .funnel(
+                      TelemetryFunnel.captureChannelSelected,
+                      props: <String, Object?>{'channel': channel.name},
+                    ));
+              },
             ),
             Flexible(child: _body(context)),
           ],

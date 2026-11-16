@@ -9,6 +9,10 @@
 /// bootstrap.dart）；解析器工厂在 lib/ai/capture_parser_factory.dart
 /// （dart-define SLIMCA_AI_BASE/KEY/MODEL → core_ai adapter，缺省 Fake）。
 ///
+/// W7-8 接线（§11.1「崩溃/性能与漏斗埋点、托管 Supabase 接入、双轨变现
+/// 骨架」）：遥测 / raw_input 上云开关 / 计费 / 同步引擎与协调器 providers——
+/// 均由 bootstrap() override 注入（AppRuntime 持有，见 lib/app/bootstrap.dart）。
+///
 /// 装配方式：`bootstrap()`（lib/app/bootstrap.dart）在 runApp 前 await 完成
 /// 异步初始化（开库、device_id、内置账本种子），以 override 注入单例；
 /// 运行期读取全部同步、零等待（§2.3 全程零等待空屏）。
@@ -16,9 +20,16 @@ library;
 
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
+import 'package:feature_sync/feature_sync.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/drift_repositories.dart';
+import '../settings/raw_input_setting.dart';
+import '../sync/sync_backend_factory.dart';
+import '../sync/sync_coordinator.dart';
+import '../telemetry/telemetry.dart';
+
+export '../billing/billing_provider.dart' show billingServiceProvider;
 
 /// 应用主库单例（§10.1 数据层选型 Drift）。
 ///
@@ -62,4 +73,47 @@ final entryLineRepositoryProvider = Provider<EntryLineRepository>((ref) {
 /// 全库共享同一设备标识。
 final todoDaoProvider = Provider<db.TodoDao>((ref) {
   return db.TodoDao(ref.watch(appDatabaseProvider));
+});
+
+// ── W7-8 装配（§11.1：遥测 / raw_input 开关 / 计费 / 同步）────────────────
+
+/// 遥测服务注入点（§3.9 监控、§10.4 壳负责装配）。
+///
+/// 缺省 = [NoopTelemetryService]（空实现）：并行测试与未 override 的环境
+/// 零副作用；生产由 bootstrap() 装配 [FileTelemetryService]（本地 JSONL
+/// 落盘，§3.9 隐私口径），装配失败亦回落 Noop（遥测缺失不伤业务）。
+final telemetryServiceProvider = Provider<TelemetryService>(
+  (ref) => const NoopTelemetryService(),
+);
+
+/// raw_input 上云开关运行期持有（§3.7 数据主权、§3.3 默认关=即用即焚）。
+///
+/// 缺省 = 新持有器（enabled=false 默认关）；bootstrap() 读 settings 表
+/// （§5.6⑲）装入上次的用户选择并 override。设置页写回持有器 + 落库。
+final rawInputPolicyProvider = Provider<RawInputPolicy>(
+  (ref) => RawInputPolicy(),
+);
+
+/// 同步引擎注入点（§6.2 客户端引擎、§10.4 装配）。
+///
+/// 必须由 bootstrap() override（依赖开库、device_id 与后端装配——均异步）；
+/// 无默认实现（缺省装配会误导「已同步」心智，§6.1 本地优先）。
+final syncEngineProvider = Provider<LocalSyncEngine>((ref) {
+  throw StateError(
+    'syncEngineProvider 未装配：必须由 bootstrap() override 后使用'
+    '（依赖 AppDatabase/device_id/同步后端，见 lib/app/bootstrap.dart）',
+  );
+});
+
+/// 同步生命周期协调器注入点（§6.2 同步时机、§10.4 装配；main() start()）。
+final syncCoordinatorProvider = Provider<SyncCoordinator>((ref) {
+  throw StateError(
+    'syncCoordinatorProvider 未装配：必须由 bootstrap() override 后使用'
+    '（见 lib/app/bootstrap.dart）',
+  );
+});
+
+/// 当前同步装配的面向用户描述（settings 页状态行；dart-define 只读常量）。
+final syncBackendLabelProvider = Provider<String>((ref) {
+  return describeSyncBackend();
 });

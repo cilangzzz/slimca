@@ -20,6 +20,12 @@ dependencies:
     path: ../core_db
   # 引擎直接读写 Drift 行（generic apply/custom SQL/事务 API）；版本与 core_db 对齐
   drift: ^2.29.0
+  # W7-8 托管 Supabase RPC（§6.2/§11.1）：纯 Dart core 包（不用 supabase_flutter，
+  # 同步层不依赖平台通道/插件，§6.1 本地优先）。锁 2.13.x：2.14+ 要求 Dart SDK
+  # >=3.9.0，与工作区 ^3.8.0 冲突。
+  supabase: ^2.13.4
+  # 传输层异常分类（ClientException → network 错，§6.1 原则 1）。
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:

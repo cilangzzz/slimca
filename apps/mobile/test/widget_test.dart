@@ -1,6 +1,6 @@
-// Slimca W2+W3-4+W5-6 冒烟测试（§11 W2 手动记一笔 → 仪表盘即时更新 +
-// §11.1 W3-4 AI 双解析闭环 + §11.1 W5-6 录入通道/真页 Tab）——三接缝收敛后
-// 的壳层装配口径。
+// Slimca W2+W3-4+W5-6+W7-8 冒烟测试（§11 W2 手动记一笔 → 仪表盘即时更新 +
+// §11.1 W3-4 AI 双解析闭环 + §11.1 W5-6 录入通道/真页 Tab + §11.1 W7-8
+// raw_input 上云开关/付费墙占位/遥测装配）——三接缝收敛后的壳层装配口径。
 //
 // 覆盖链路（§4.2 壳 + §9.3#3 录入抽屉 + §6.2 写路径 + §3.3 语音通道）：
 // 冷启动首帧直出仪表盘（无 spinner §2.3 步 0）→ 4 Tab 导航壳（§4.2）→
@@ -12,10 +12,16 @@
 // 仪表盘即时更新；W5-6：账本/计划 Tab 真页（§3.4 流水按日分组、§4.2 计划
 // 三卡 + 待办快速添加 §3.6）。
 //
+// W7-8（第二个用例）：我的 Tab → raw_input 上云开关默认关（§3.3/§3.7）→
+// 开关写回 settings 表（§5.6⑲ JSON 值）→ 付费墙双轨 SKU 目录（§3.9，
+// Fake 计费流）→ 购买/恢复 SnackBar 反馈链路。
+//
 // 测试装配：内存 Drift 库 + 固定 device_id 的 HlcClock 直接 override（不跑
 // bootstrap()，避免测试写真实文件库）；feature_capture 网关/解析器按
 // bootstrap() 同款工厂注入（§10.4）；内置账本种子用 ensureDefaultLedgers
 // 补齐（§5.4）。Windows 宿主缺 sqlite3 运行库时温和跳过（与 core_db 同策略）。
+
+import 'dart:convert';
 
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
@@ -30,6 +36,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:slimca/ai/capture_parser_factory.dart';
 import 'package:slimca/app/bootstrap.dart';
 import 'package:slimca/app/providers.dart';
+import 'package:slimca/billing/sku_catalog.dart';
+import 'package:slimca/features/settings/settings_page.dart';
 import 'package:slimca/main.dart';
 
 /// 判断是否为「宿主缺 sqlite3 运行库」类错误（复刻 core_db test_support 口径）。
@@ -281,5 +289,106 @@ void main() {
     // 勾选完成 → done/total 计数刷新（§3.6 勾选完成、done_at 只前进 §6.5）。
     await tester.tap(find.text('冥想 10 分钟'));
     await _pumpUntilFound(tester, find.text('1/1'));
+  });
+
+  testWidgets('W7-8 冒烟：raw_input 上云开关默认关+settings 落库 → 付费墙双轨 '
+      'SKU 目录 → Fake 计费流购买/恢复反馈', (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final database = await _tryOpenMemoryDatabase();
+    if (database == null) {
+      // Windows 宿主缺 sqlite3.dll：跳过（集成机有库，冒烟照常执行）。
+      return;
+    }
+    addTearDown(database.close);
+
+    const deviceId = 'ABCDEF123456';
+    final clock = HlcClock(deviceId: deviceId);
+    await ensureDefaultLedgers(database, clock);
+
+    // W7-8 装配同款最小集（§10.4）：计费走缺省 FakeBillingService（真实
+    // in_app_purchase 待商店账号，W8-9 灰度）；遥测缺省 Noop（零副作用）。
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(database),
+          hlcClockProvider.overrideWithValue(clock),
+          captureGatewayProvider
+              .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
+          captureParserProvider.overrideWithValue(createCaptureParser()),
+        ],
+        child: const SlimcaApp(),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 600));
+
+    // ── 我的 Tab（§4.2：主题/同步状态/AI 开关/数据导出/订阅）────────────
+    await tester.tap(find.text('我的'));
+    await tester.pumpAndSettle();
+
+    // 同步状态行（§6.1 顶栏小圆点的设置页对应物；缺省=本地回环待用户凭据）。
+    expect(find.textContaining('本地回环'), findsOneWidget);
+
+    // raw_input 上云开关（§3.7 数据主权、§3.3 默认关=即用即焚）。
+    expect(find.text('原文上云（raw_input）'), findsOneWidget);
+    final switchFinder = find.byKey(settingsRawInputSwitchKey);
+    expect(switchFinder, findsOneWidget);
+    expect(
+      tester.widget<SwitchListTile>(switchFinder).value,
+      isFalse,
+      reason: '默认关（§3.3）',
+    );
+
+    // 开 → 运行期持有翻转 + settings 表落库（§5.6⑲ value 一律 JSON）。
+    await tester.tap(switchFinder);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(switchFinder).value, isTrue);
+    final row = await database
+        .customSelect(
+          "SELECT value FROM settings WHERE key = 'raw_input_cloud_enabled'",
+        )
+        .getSingle();
+    expect(jsonDecode(row.data['value']! as String), isTrue);
+
+    // 关回默认档（数据主权：随时可撤回，§3.7）。
+    await tester.tap(switchFinder);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(switchFinder).value, isFalse);
+
+    // ── 付费墙占位（§3.9 双轨：买断 + AI 订阅；Fake 内测流）────────────
+    await tester.ensureVisible(find.text('升级 Slimca Pro'));
+    await tester.pumpAndSettle();
+    // 双轨四档目录渲染（价格=待实测复核锚点，§12.3；展示层 ¥xx.xx[/月]）。
+    expect(find.textContaining('Pro 买断（首发档） · ¥98.00'), findsOneWidget);
+    expect(find.textContaining('Pro 买断（标准档） · ¥128.00'), findsOneWidget);
+    expect(find.textContaining('AI 能力订阅（基础档） · ¥12.00/月'), findsOneWidget);
+    expect(find.textContaining('AI 能力订阅（完整档） · ¥18.00/月'), findsOneWidget);
+    // 骨架边界注记可见（真实内购待商店账号 W8-9）。
+    expect(find.textContaining('Fake 计费流'), findsOneWidget);
+
+    // 恢复购买（先于购买 → 无历史购买反馈，Fake 流商店口径）。
+    await tester.ensureVisible(find.byKey(settingsRestorePurchasesKey));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(settingsRestorePurchasesKey));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('无历史购买'), findsOneWidget);
+    // 刷掉 SnackBar 展示期定时器（默认 4s）与退场动画——避免测试收尾
+    // 「A Timer is still pending」。
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    // 购买首发档 → purchased + SnackBar 反馈（Fake 流不产生真实扣款）。
+    final buyKey = Key('settings_paywall_buy_${kSkuProLifetimeLaunch.id}');
+    await tester.ensureVisible(find.byKey(buyKey));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(buyKey));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('已购买'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
   });
 }

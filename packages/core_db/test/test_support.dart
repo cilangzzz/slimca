@@ -38,6 +38,17 @@ Future<db.AppDatabase?> tryOpenTestDatabase() async {
   }
 }
 
+/// 清空 sync_outbox（测试辅助）。
+///
+/// W7-8「全写路径 outbox 补课」后，beforeOpen 的默认数据 seed（§5.4）会把
+/// 24 条 seed 行（categories 22 + ledgers 2，§5.1 同步真值表）同事务入队
+/// sync_outbox——需要精确断言「本次业务写出网行数」的测试先清空 seed 出网
+/// 项，从「干净 outbox」起步。seed 入队语义（全量入队/幂等/完整性）由
+/// seed_idempotency_test 与本文件 seed 用例专属覆盖，不走本辅助。
+Future<void> drainSeedOutbox(db.AppDatabase database) async {
+  await database.delete(database.syncOutbox).go();
+}
+
 /// 测试用行戳源：物理毫秒逐次自增，保证 hlc 全序单调（§6.3）。
 class TestClock {
   TestClock(this.deviceId, {int? baseMs})

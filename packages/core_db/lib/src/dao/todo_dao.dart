@@ -4,6 +4,11 @@
 /// unset → set 胜（勾选永不丢失）。本地单写者语义下：set 置当前时刻（已有
 /// 完成时刻则不覆盖，保留首次完成值）；unset 置 NULL——「取消完成仅无并发
 /// 时生效」，跨设备并发合并由同步层按 done_at 非空者胜仲裁（W5-6 接入）。
+///
+/// 出网纪律（§6.2 写路径，W5-6 补课）：todos 为 §5.1 同步真值表，四个写
+/// 路径（create/setDone/updateDetails/softDelete）的业务行与行快照入队
+/// sync_outbox 同事务提交；no-op 分支（重复勾选/重复取消）不产生任何写、
+/// 也不入队。pull 半边走 feature_sync 通用整行落库、不经本 DAO，无回声。
 library;
 
 import 'package:drift/drift.dart';
@@ -13,21 +18,26 @@ import '../tables/plan_tables.dart' show Todos;
 import '../uuid_v7.dart';
 import 'day_summary_projection.dart';
 import 'local_write_clock.dart';
+import 'sync_outbox_writer.dart';
 
 /// 待办 DAO（§5.5⑩ todos）。
 class TodoDao {
   TodoDao(this._db, {LocalWriteClock? clock, this.projection})
-      : _clock = clock ?? LocalWriteClock(_db);
+      : _clock = clock ?? LocalWriteClock(_db),
+        _outbox = SyncOutboxWriter(_db);
 
   final AppDatabase _db;
   final LocalWriteClock _clock;
+
+  /// 出网入队器（§5.6⑯/§6.2）：业务行同事务读回快照入队。
+  final SyncOutboxWriter _outbox;
 
   /// 非空时：待办变更后立即重算所属日期投影（todo_done/todo_total），
   /// 支撑 W2 验收「仪表盘待办卡即时更新」（§11.1 W2、§5.6 重建规则）。
   final DaySummaryProjection? projection;
 
   /// 新建待办（§5.5⑩）：[date] NULL=无日期收集箱；id 由本地生成 UUIDv7
-  /// （§5.1 主键约定）。
+  /// （§5.1 主键约定）。业务行与 outbox 行快照同事务（§6.2）。
   Future<Todo> create({
     required String title,
     String? note,
@@ -37,24 +47,28 @@ class TodoDao {
   }) async {
     final stamp = await _clock.next();
     final id = generateUuidV7();
-    await _db.into(_db.todos).insert(
-          TodosCompanion.insert(
-            id: id,
-            title: title,
-            note: Value(note),
-            date: Value(date),
-            doneAt: const Value(null),
-            dueAt: Value(dueAt),
-            goalLink: Value(goalLink),
-            // 非空无默认列在 Companion.insert 中取裸值（Value 只用于
-            // 可空/带默认列，§5.1 公共列均为非空无默认）。
-            createdAt: stamp.updatedAtMs,
-            updatedAt: stamp.updatedAtMs,
-            hlc: stamp.hlc,
-            revision: 1,
-            deviceId: await _clock.deviceId(),
-          ),
-        );
+    await _db.transaction(() async {
+      await _db.into(_db.todos).insert(
+            TodosCompanion.insert(
+              id: id,
+              title: title,
+              note: Value(note),
+              date: Value(date),
+              doneAt: const Value(null),
+              dueAt: Value(dueAt),
+              goalLink: Value(goalLink),
+              // 非空无默认列在 Companion.insert 中取裸值（Value 只用于
+              // 可空/带默认列，§5.1 公共列均为非空无默认）。
+              createdAt: stamp.updatedAtMs,
+              updatedAt: stamp.updatedAtMs,
+              hlc: stamp.hlc,
+              revision: 1,
+              deviceId: await _clock.deviceId(),
+            ),
+          );
+      // §6.2 写路径纪律：todos 行快照同事务入队 sync_outbox（§5.6⑯）。
+      await _outbox.enqueueRow('todos', id);
+    });
     await _recomputeDay(date);
     return (await findById(id))!;
   }
@@ -86,6 +100,8 @@ class TodoDao {
           revision: Value(row.revision + 1),
         ),
       );
+      // §6.2：勾选/取消均为真值行写入，行快照同事务入队（§5.6⑯）。
+      await _outbox.enqueueRow('todos', id);
       await _recomputeDay(row.date);
     });
   }
@@ -130,6 +146,8 @@ class TodoDao {
           revision: Value(row.revision + 1),
         ),
       );
+      // §6.2：主干字段变更同为真值行写入，行快照同事务入队（§5.6⑯）。
+      await _outbox.enqueueRow('todos', id);
       final newDate = date == _unchanged ? row.date : date as String?;
       final affected = <String?>{row.date, newDate}..remove(null);
       for (final day in affected) {
@@ -157,6 +175,9 @@ class TodoDao {
           revision: Value(row.revision + 1),
         ),
       );
+      // §6.2：墓碑写入同事务入队；读回快照携带 deleted_at → 自动以
+      // delete 语义出网（§5.6⑯/§6.5 墓碑拒绝复活）。
+      await _outbox.enqueueRow('todos', id);
       await _recomputeDay(row.date);
     });
   }

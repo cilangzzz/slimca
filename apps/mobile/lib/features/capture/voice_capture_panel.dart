@@ -48,7 +48,8 @@ class VoiceCapturePanel extends ConsumerStatefulWidget {
   /// 与壳共享的打开参数（同一 CaptureSeed → 同一控制器实例，§10.4 family）。
   final CaptureSeed seed;
 
-  /// 提交成功回调（传 entryId）；缺省=成功后自动关闭抽屉（§4.3）。
+  /// 提交成功回调（传 entryId）：纯通知（W7-8 漏斗埋点），不接管导航——
+  /// 提交成功后抽屉恒由本面板自动关闭（§4.3，W7-8 集成修复口径）。
   final void Function(String entryId)? onSubmitted;
 
   /// 解析失败降级时切回「写」通道的回调（原文保留在控制器 inputText，
@@ -420,10 +421,12 @@ class _VoiceCapturePanelState extends ConsumerState<VoiceCapturePanel> {
       ));
       if (!mounted) return;
       setState(() => _submitting = false);
+      // W7-8 集成修复：onSubmitted 是宿主的提交成功纯通知（漏斗终点 §12），
+      // 不是抽屉关闭的接管——关闭语义恒由页面自身负责（与 CapturePage
+      // _finishSubmit 的 W7-8 修复同口径）。
       final callback = widget.onSubmitted;
       if (callback != null) {
         callback(entryId);
-        return;
       }
       if (Navigator.of(context).canPop()) {
         Navigator.of(context).pop();

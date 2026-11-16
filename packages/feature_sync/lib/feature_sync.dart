@@ -18,7 +18,9 @@
 /// DI 契约（§10.4 壳负责装配）：AppDatabase + HlcClock（与 UI 写路径共享
 /// 同一时钟实例，§6.3）在宿主 bootstrap 注入；本库不建 Riverpod provider
 /// ——调度触发（启动即拉/前台切回/15 分钟兜底）属 W7-8 接入 Supabase 时的
-/// 壳层编排（§6.2 触发时机）。
+/// 壳层编排（§6.2 触发时机）。W7-8 起另提供 [SupabaseSyncBackend]：宿主注入
+/// [SyncConfig]（url/anonKey，用户尚未提供凭据——真实端点联调「待用户凭据」），
+/// 传输缝 [SyncRpcTransport] 供契约测试替换 mock（§6.7）。
 library;
 
 export 'src/device_registry.dart';
@@ -28,4 +30,7 @@ export 'src/in_memory_sync_backend.dart';
 export 'src/local_loopback_backend.dart';
 export 'src/local_sync_engine.dart';
 export 'src/sync_backend.dart';
+export 'src/sync_config.dart';
 export 'src/sync_table_catalog.dart';
+export 'src/supabase_rpc_transport.dart';
+export 'src/supabase_sync_backend.dart';

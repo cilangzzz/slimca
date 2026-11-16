@@ -8,7 +8,9 @@
 /// - 投影（W2）：`DaySummaryProjection`——day_summary v1 重算与自愈
 ///   （§5.6⑬），仪表盘快照直出（§3.2）；
 /// - DAO（W2）：LedgerDao/CategoryDao/TodoDao 及空库默认数据 seed
-///   （§5.4、§3.4、§5.5⑩）。
+///   （§5.4、§3.4、§5.5⑩）；
+/// - 出网入队（W5-6 补课/W7-8）：`SyncOutboxWriter`——§6.2 写路径纪律
+///   「真值表行快照与业务行同事务入队 sync_outbox」的统一落点。
 library;
 
 export 'src/app_database.dart';
@@ -19,6 +21,7 @@ export 'src/dao/entry_line_repository.dart';
 export 'src/dao/entry_repository.dart';
 export 'src/dao/ledger_dao.dart';
 export 'src/dao/local_write_clock.dart';
+export 'src/dao/sync_outbox_writer.dart';
 export 'src/dao/todo_dao.dart';
 export 'src/tables/event_tables.dart';
 export 'src/tables/infra_tables.dart';

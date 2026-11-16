@@ -207,6 +207,16 @@ class InMemorySyncBackend implements SyncBackend {
           nextCursors[spec.name] = state.hlc;
         }
       }
+      // W7-8 集成修复：游标单调（只进不退，与 0002_sync_rpc.sql 的
+      // GREATEST(v_cursor, v_max_hlc) 对齐）——投递簿补投的低 hlc 迟到行
+      // 会把「本批最大 hlc」拉到既有游标之下；游标若回退，下轮会把
+      // (旧批 max, 既有游标] 区间的已投递行整段重投（§6.2 增量语义）。
+      // 置于行预算 break 之前：预算截断的表同样不得回退游标。
+      final prevCursor = since[spec.name] ?? '';
+      final batchMax = nextCursors[spec.name];
+      if (batchMax != null && batchMax.compareTo(prevCursor) < 0) {
+        nextCursors[spec.name] = prevCursor;
+      }
       if (changes.length >= maxPullRows) {
         break;
       }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:core_domain/core_domain.dart' show formatCalendarDay;
 import 'package:feature_capture/feature_capture.dart' show CaptureSeed;
 import 'package:flutter/material.dart';
@@ -11,6 +13,8 @@ import '../features/ledger/ledger_page.dart';
 import '../features/plan/fitness_log_page.dart';
 import '../features/plan/plan_page.dart';
 import '../features/settings/settings_page.dart';
+import '../telemetry/telemetry.dart';
+import 'providers.dart';
 
 /// 全局路由表（§4.3 路由表与页面清单）。
 ///
@@ -105,6 +109,18 @@ class SlimcaShell extends ConsumerWidget {
           seed: CaptureSeed(
             initialDate: formatCalendarDay(ref.read(selectedDateProvider)),
           ),
+          // W7-8 录入漏斗终点（§12 验收口径「确认」）：onSubmitted 在所有
+          // 获取性提交路径（手记/AI 确认/降级手填/chip 复记）触发（§2.3 步 5
+          // 打开→输入→解析→确认）。props 空（条目内容禁入遥测，§3.9）。
+          // 注：编辑路径（修正链 showCaptureSheet，§3.4）为纠错而非获取，
+          // 不计入本漏斗（§2.3 录入漏斗口径）。
+          onSubmitted: (_) {
+            unawaited(
+              ref.read(telemetryServiceProvider).funnel(
+                    TelemetryFunnel.captureConfirm,
+                  ),
+            );
+          },
         ),
         tooltip: '记一件事',
         child: const Icon(Icons.add),

@@ -7,14 +7,19 @@
 /// 承担；本库不重复实现仓库，只做 feature 层编排：
 /// - W2 手动写路径：entries(kind=expense) + entry_lines(type=money) 的实体
 ///   构造与同事务落库（§5.2 facet 拆行），HLC 由注入的 [dom.HlcClock]
-///   签发（§6.3 定宽编码）；W5-6 起 entries/entry_lines 行快照同事务入队
-///   sync_outbox（§6.2 写路径纪律）——
+///   签发（§6.3 定宽编码）；
 /// - W2 修正闭环编排：主干字段与金额行的变更分流 + corrections 审计行落库
 ///   （§5.6⑮ 明确「审计行由调用方落库」，仓库层无从得知字段级前后值）；
 /// - W3-4 AI 写路径（§11.1「AI 双解析闭环（文本）」）：确认卡/复记/降级
 ///   提交 → entries + calorie/money 行 + food_items + ai_parses（留痕与
 ///   input_hash 缓存，§5.6⑭）+ corrections 差异审计（AI 初值 vs 用户确认，
 ///   §5.6⑮ source=ai_corrected）同事务落库；
+/// - 出网纪律（§6.2 写路径，W5-6 集成披露的补课项）：本网关触达的全部
+///   同步真值表写入（entries/entry_lines/food_items/corrections/ledgers）
+///   一律经 core_db `SyncOutboxWriter` 在**同一事务内**读回行快照入队
+///   sync_outbox（§5.6⑯）——applyMoneyCorrection 修正路径的全量写入集
+///   （主干行、旧行 superseded、新修正行、confirmed→edited 联动、审计行）
+///   亦同；入队去重由 writer 折叠同 (table,row) 的未 ack 出网行；
 /// - 选项装载：money 账本/kcal 账本/按方向过滤分类/分类建议命中/最近记录
 ///   chips（§2.4）/编辑回填目标。
 ///
@@ -61,6 +66,7 @@ class CaptureGateway {
     required this.clock,
     cdb.DaySummaryProjection? projection,
   })  : db = database,
+        outbox = cdb.SyncOutboxWriter(database),
         entries = cdb.DriftEntryRepository(database, projection: projection),
         entryLines = cdb.DriftEntryLineRepository(database, projection: projection);
 
@@ -68,6 +74,11 @@ class CaptureGateway {
 
   /// 应用级单例时钟（§6.3）：本网关签发的所有行 HLC 皆源于此。
   final dom.HlcClock clock;
+
+  /// 出网入队器（§5.6⑯/§6.2）：本网关全部真值表写入经它在业务事务内
+  /// 读回行快照入队 sync_outbox（W5-6 补课：含 food_items/corrections/
+  /// 修正路径/惰性账本）。
+  final cdb.SyncOutboxWriter outbox;
 
   /// 事件主干仓库（core_db 实现，§10.4）。
   final cdb.DriftEntryRepository entries;
@@ -96,34 +107,13 @@ class CaptureGateway {
         deviceId: clock.deviceId,
       );
 
-  /// 行快照入队（§5.6⑯ payload=实体 toJson 同构快照）：entries/entry_lines
-  /// 行级同步协议表随业务写同事务入队 sync_outbox（§6.2 写路径纪律，
-  /// W5-6 SyncEngine 出队后上送；幂等键=outbox.id）。
-  Future<void> _enqueueRowSnapshot(
-    Map<String, Object?> snapshot, {
-    required String table,
-    required String rowId,
-    required dom.SyncMeta meta,
-  }) async {
-    await db.into(db.syncOutbox).insert(
-          cdb.SyncOutboxCompanion.insert(
-            id: _newId(),
-            targetTable: table,
-            rowId: rowId,
-            op: dom.OutboxOp.upsert.wire,
-            payload: jsonEncode(snapshot),
-            baseRevision: Value(meta.revision),
-            hlc: meta.hlc,
-            createdAt: meta.updatedAt,
-          ),
-        );
-  }
-
   /// 追加一条 corrections 审计行（§5.6⑮ append-only）。
   ///
   /// [source]：W2 手动修正链='user'；W3-4「AI 初值 vs 用户确认差异」=
   /// 'ai_corrected'（W3-4 主线任务口径；§5.6⑮ 的 TEXT source 列允许扩展，
   /// 供 P2 校准闭环区分「AI 预填被确认改动」与纯人工修正）。
+  /// §6.2 写路径纪律：corrections 为同步真值表，审计行快照同事务入队
+  /// sync_outbox（W5-6 补课）。
   Future<void> _insertCorrectionAudit({
     required String entryId,
     String? lineId,
@@ -132,8 +122,9 @@ class CaptureGateway {
     required String newValue,
     required String source,
   }) async {
+    final id = _newId();
     await db.into(db.corrections).insert(cdb.Correction(
-          id: _newId(),
+          id: id,
           entryId: entryId,
           lineId: lineId,
           field: field,
@@ -148,6 +139,7 @@ class CaptureGateway {
           schemaVer: dom.kCurrentSchemaVer,
           deviceId: clock.deviceId,
         ));
+    await outbox.enqueueRow('corrections', id);
   }
 
   // ── W2 手动记账写路径（§11.1 W2「手动记账 CRUD 全链路（无 AI）」）──
@@ -210,22 +202,13 @@ class CaptureGateway {
     );
     // 写路径经仓库接口落库（§3.3「提交经 EntryRepository 落库」）；
     // Drift 嵌套事务：内层（仓库自身的 transaction）join 外层事务。
-    // §6.2 写路径纪律：entries/entry_lines 行快照与业务行同事务入队 outbox。
+    // §6.2 写路径纪律：entries/entry_lines 行快照与业务行同事务入队 outbox
+    // （经 SyncOutboxWriter 读回终态，payload 与落库行同源，§5.6⑯）。
     await db.transaction(() async {
       await entries.upsert(entry);
       await entryLines.upsert(line);
-      await _enqueueRowSnapshot(
-        entry.toJson(),
-        table: 'entries',
-        rowId: entry.id,
-        meta: entry.meta,
-      );
-      await _enqueueRowSnapshot(
-        line.toJson(),
-        table: 'entry_lines',
-        rowId: line.id,
-        meta: line.meta,
-      );
+      await outbox.enqueueRow('entries', entry.id);
+      await outbox.enqueueRow('entry_lines', line.id);
     });
     return entry.id;
   }
@@ -237,7 +220,10 @@ class CaptureGateway {
   /// - 金额行（amount/direction/category/ledger 变更）：新增 correction 行
   ///   经 [entryLines.supersede] 同事务替换旧行（金额永不原地改，§3.4）；
   /// - 字段级变更落 corrections 审计行（§5.6⑮：主干字段 line_id=NULL）；
-  /// - 无真实变更时不产生任何行（修正=新增行仅对变更生效）。
+  /// - 无真实变更时不产生任何行（修正=新增行仅对变更生效）；
+  /// - §6.2 写路径纪律（W5-6 补课）：全部真值表写入（entries 主干、旧行
+  ///   superseded、新修正行、审计行）在同一事务内读回终态入队 sync_outbox；
+  ///   任一步失败整体回滚，无半途出网项。
   Future<String> applyMoneyCorrection(CaptureCorrectionRequest request) {
     return db.transaction<String>(() async {
       final oldEntry = await entries.findById(request.entryId);
@@ -279,6 +265,13 @@ class CaptureGateway {
         return request.entryId;
       }
 
+      // 本次事务内「entries 主干行是否被真实写 over」标记（§6.2：只对真实
+      // 发生的真值行写入入队，未变更行不产出冗余出网项）：
+      // - entryChanged → 主干 upsert；
+      // - 仅 lineChanged 且父事件此前为 confirmed → supersede 的
+      //   confirmed→edited 联动写（core_db 仓库事务内）。
+      var entryRowWritten = false;
+
       // ① 主干行：实体重建（§5.1 created_at 不变、revision 本地自增）。
       if (entryChanged) {
         final editedEntry = oldEntry.copyWith(
@@ -293,6 +286,7 @@ class CaptureGateway {
           ),
         );
         await entries.upsert(editedEntry);
+        entryRowWritten = true;
 
         // ② 主干级审计（§5.6⑮ line_id 可空=主干字段修正）。
         if (oldEntry.date != request.date) {
@@ -335,6 +329,11 @@ class CaptureGateway {
 
       // ③ 金额行修正：新增行 + 旧行 superseded + 行级审计（§3.4/§5.2②）。
       if (lineChanged) {
+        // 主干此前未被本次修正改写且仍为 confirmed：supersede 会联动写
+        // confirmed→edited（core_db 仓库事务内），须入队（§6.2）。
+        if (!entryRowWritten && oldEntry.status == dom.EntryStatus.confirmed) {
+          entryRowWritten = true;
+        }
         final correction = dom.EntryLine(
           id: _newId(),
           entryId: oldEntry.id,
@@ -394,6 +393,19 @@ class CaptureGateway {
             source: 'user',
           );
         }
+
+        // §6.2 写路径纪律（W5-6 补课）：supersede 修正链的全部真值行写入
+        // 同事务读回终态入队——旧行（status=superseded）与新修正行
+        // （correction_of 指向旧行）各一条出网项（§5.6⑯/§5.2②）。
+        await outbox.enqueueRow('entry_lines', request.oldLineId);
+        await outbox.enqueueRow('entry_lines', correction.id);
+      }
+
+      // ④ 主干行快照入队（§6.2）：entryChanged 的 upsert 与 supersede 的
+      // confirmed→edited 联动写的是同一行——同 (table,row) 的未 ack 出网项
+      // 经 SyncOutboxWriter 去重折叠为一条，payload=读回终态（§5.6⑯）。
+      if (entryRowWritten) {
+        await outbox.enqueueRow('entries', request.entryId);
       }
       return request.entryId;
     });
@@ -414,7 +426,10 @@ class CaptureGateway {
   ///   confidence=null（人工语义）；
   /// - food_items：calorie 行菜品明细逐行落库（§7.3 items[] 映射）；
   /// - corrections：[CaptureAiSubmitRequest.aiInitials] 非空时写「AI 初值 vs
-  ///   用户确认」差异审计行（§5.6⑮，source=ai_corrected，append-only）。
+  ///   用户确认」差异审计行（§5.6⑮，source=ai_corrected，append-only）；
+  /// - §6.2 写路径纪律：全部真值表行（entries/entry_lines/food_items/
+  ///   corrections）同事务读回行快照入队 sync_outbox（§5.6⑯，W5-6 补课补齐
+  ///   food_items 与 corrections 两类）；ai_parses 为本地件、永不同步。
   ///
   /// 金额不可变语义自确认起生效：后续修改一律走 W2 [applyMoneyCorrection]
   /// （新增 correction 行，§3.4）。
@@ -443,13 +458,8 @@ class CaptureGateway {
         meta: _newMeta(),
       );
       await entries.upsert(entry);
-      // §6.2 写路径纪律：主干行快照同事务入队（§5.6⑯）。
-      await _enqueueRowSnapshot(
-        entry.toJson(),
-        table: 'entries',
-        rowId: entry.id,
-        meta: entry.meta,
-      );
+      // §6.2 写路径纪律：主干行快照同事务入队（§5.6⑯，读回终态入队）。
+      await outbox.enqueueRow('entries', entry.id);
 
       String? calorieLineId;
       String? moneyLineId;
@@ -477,17 +487,15 @@ class CaptureGateway {
           meta: _newMeta(),
         );
         await entryLines.upsert(line);
-        await _enqueueRowSnapshot(
-          line.toJson(),
-          table: 'entry_lines',
-          rowId: line.id,
-          meta: line.meta,
-        );
+        await outbox.enqueueRow('entry_lines', line.id);
         calorieLineId = line.id;
         // food_items 逐菜品（§7.3「items[] → food_items 逐菜品」）。
+        // §6.2 写路径纪律（W5-6 补课）：food_items 为同步真值表（§5.2③），
+        // 每行同事务读回快照入队 sync_outbox（§5.6⑯）。
         for (final item in request.items) {
+          final itemId = _newId();
           await db.into(db.foodItems).insert(cdb.FoodItem(
-                id: _newId(),
+                id: itemId,
                 entryId: entry.id,
                 lineId: line.id,
                 name: item.name,
@@ -508,6 +516,7 @@ class CaptureGateway {
                 schemaVer: dom.kCurrentSchemaVer,
                 deviceId: clock.deviceId,
               ));
+          await outbox.enqueueRow('food_items', itemId);
         }
       }
       if (request.hasMoney) {
@@ -530,17 +539,13 @@ class CaptureGateway {
           meta: _newMeta(),
         );
         await entryLines.upsert(line);
-        await _enqueueRowSnapshot(
-          line.toJson(),
-          table: 'entry_lines',
-          rowId: line.id,
-          meta: line.meta,
-        );
+        await outbox.enqueueRow('entry_lines', line.id);
         moneyLineId = line.id;
       }
 
       // corrections 差异审计（§5.6⑮）：AI 初值 vs 用户确认，source=ai_corrected。
       // 仅 AI/缓存路径携带初值快照；chip 复记与手动降级无初值、不产审计行。
+      // 审计行落库即入队（_insertCorrectionAudit 内，§6.2）。
       final initials = request.aiInitials;
       if (initials != null) {
         if (initials.title != request.title) {
@@ -695,6 +700,8 @@ class CaptureGateway {
 
   /// 内置 kcal 账本（§5.2②「kcal 行归集到内置 kcal 账本」、§5.4④「不可删除
   /// 不可多开」）：seed 保证恰一个，此处兜底惰性创建（幂等）。
+  /// §6.2 写路径纪律：ledgers 为同步真值表——惰性创建与行快照入队同事务
+  /// 提交（无半途 outbox）；嵌套调用（submitAiCapture 事务内）join 外层事务。
   Future<cdb.Ledger> ensureKcalLedger() async {
     final rows = await (db.select(db.ledgers)
           ..where((t) => t.kind.equals('kcal') & t.deletedAt.isNull()))
@@ -717,7 +724,10 @@ class CaptureGateway {
       schemaVer: dom.kCurrentSchemaVer,
       deviceId: clock.deviceId,
     );
-    await db.into(db.ledgers).insert(row);
+    await db.transaction(() async {
+      await db.into(db.ledgers).insert(row);
+      await outbox.enqueueRow('ledgers', row.id);
+    });
     return row;
   }
 
@@ -823,6 +833,8 @@ class CaptureGateway {
   /// MVP「恒默认账本」（§3.4 单账本 MVP、§5.4④）：缺 money 账本时惰性创建
   /// 一个，保证「记一笔」开箱可用；幂等（已有即直接返回第一条）。空库首次
   /// 打开时 core_db 的 seedDefaultData 已建默认账本，此处是兜底路径。
+  /// §6.2 写路径纪律：惰性创建与行快照入队同事务（ledgers 为同步真值表，
+  /// 无半途 outbox）。
   Future<CaptureLedgerOption> ensureDefaultLedger() async {
     final existing = await _loadMoneyLedgerRows();
     if (existing.isNotEmpty) {
@@ -847,7 +859,10 @@ class CaptureGateway {
       schemaVer: dom.kCurrentSchemaVer,
       deviceId: clock.deviceId,
     );
-    await db.into(db.ledgers).insert(row);
+    await db.transaction(() async {
+      await db.into(db.ledgers).insert(row);
+      await outbox.enqueueRow('ledgers', row.id);
+    });
     return CaptureLedgerOption(id: row.id, name: row.name, currency: row.currency);
   }
 

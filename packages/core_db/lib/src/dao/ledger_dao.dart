@@ -4,6 +4,12 @@
 /// 启用）；kcal 账本系统内置一个、不可删除不可多开，币种=kcal——「金额分类
 /// 与热量维度并存」（§11.1 W2、§5.4 kcal 账本行）。幂等：按 kind 查缺补插，
 /// 已存在的行不动（允许用户后续改名/改图标）。
+///
+/// 出网纪律（§6.2 写路径，W5-6 补课）：ledgers 为 §5.1 同步真值表，seed
+/// 行与行快照入队 sync_outbox 同事务——否则他端收不到默认账本/分类、
+/// entry_lines 的 ledger_id 引用在服务端失配，破坏 W7-8「双设备一致率
+/// 100%」（§11.1 W7-8）。幂等由「缺什么补什么」保证：行已存在（含 pull
+/// 回来的他端 seed 行）不再插入、也就不再入队。
 library;
 
 import 'dart:convert';
@@ -13,14 +19,19 @@ import 'package:drift/drift.dart';
 import '../app_database.dart';
 import '../uuid_v7.dart';
 import 'local_write_clock.dart';
+import 'sync_outbox_writer.dart';
 
 /// 账本 DAO（§5.4④ ledgers）。
 class LedgerDao {
   LedgerDao(this._db, {LocalWriteClock? clock})
-      : _clock = clock ?? LocalWriteClock(_db);
+      : _clock = clock ?? LocalWriteClock(_db),
+        _outbox = SyncOutboxWriter(_db);
 
   final AppDatabase _db;
   final LocalWriteClock _clock;
+
+  /// 出网入队器（§5.6⑯/§6.2）：seed 真值行同事务读回快照入队。
+  final SyncOutboxWriter _outbox;
 
   /// 默认数据 seed（空库首次打开由 [seedDefaultData] 调用）：
   /// - kind='money' 缺失 → 插入默认账本（CNY、期初余额 0）；
@@ -121,9 +132,10 @@ class LedgerDao {
 
   Future<void> _insert(_SeedLedger seed) async {
     final stamp = await _clock.next();
+    final id = generateUuidV7();
     await _db.into(_db.ledgers).insert(
           LedgersCompanion.insert(
-            id: generateUuidV7(),
+            id: id,
             name: seed.name,
             icon: seed.icon,
             currency: seed.currency,
@@ -140,6 +152,9 @@ class LedgerDao {
             deviceId: await _clock.deviceId(),
           ),
         );
+    // §6.2：seed 行同为同步真值表，行快照同事务入队（调用方 seedDefaults
+    // 已在事务内，§5.6⑯）。
+    await _outbox.enqueueRow('ledgers', id);
   }
 }
 

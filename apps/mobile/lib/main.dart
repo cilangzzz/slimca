@@ -1,17 +1,58 @@
+import 'dart:async';
+
+import 'package:core_domain/core_domain.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/bootstrap.dart';
 import 'app/router.dart';
 import 'app/theme.dart';
+import 'sync/sync_coordinator.dart';
 
 Future<void> main() async {
   // §11 W2 接线：runApp 前完成异步装配（开库、device_id、内置账本种子），
   // 以 overrides 注入 ProviderScope——运行期依赖全同步可读、页面零等待
   // （§2.3 步 0 无 spinner 冷启动；装配细节见 lib/app/bootstrap.dart）。
+  final bootStart = DateTime.now();
   WidgetsFlutterBinding.ensureInitialized();
-  final overrides = await bootstrap();
-  runApp(ProviderScope(overrides: overrides, child: const SlimcaApp()));
+  final runtime = await bootstrap();
+
+  // ── W7-8 崩溃上报钩子（§3.9 监控；只记错误类型，内容禁入）。
+  // 装配期（bootstrap 之前）的异常不在钩子覆盖内——装配失败即不可启动，
+  // 由 Flutter 默认错误呈现兜底。
+  final previousFlutterOnError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    unawaited(runtime.telemetry.crash(
+      details.exception,
+      details.stack,
+      source: 'flutter_framework',
+    ));
+    previousFlutterOnError?.call(details);
+  };
+  PlatformDispatcher.instance.onError = (error, stackTrace) {
+    unawaited(runtime.telemetry.crash(error, stackTrace,
+        source: 'platform_dispatcher'));
+    return false; // 交回引擎默认处理（崩溃日志照常）。
+  };
+
+  runApp(ProviderScope(overrides: runtime.overrides, child: const SlimcaApp()));
+
+  // ── W7-8 冷启动完成漏斗（§12 验收口径：首帧栅格化=可交互基线，§2.3 步 0
+  // ≤1.2s 的实测数据源；props 仅 boot_ms 标量，§3.9 隐私口径）。
+  unawaited(WidgetsBinding.instance.waitUntilFirstFrameRasterized.then((_) {
+    return runtime.telemetry.funnel(
+      TelemetryFunnel.coldStartComplete,
+      props: <String, Object?>{
+        'boot_ms': DateTime.now().difference(bootStart).inMilliseconds,
+      },
+    );
+  }));
+
+  // ── W7-8 同步启动（§6.2 同步时机：启动后一轮 + 周期定时 + 前台切回）。
+  // 本地优先：start() 内部吞掉分区异常，绝不阻塞 UI（§6.1 原则 1）。
+  WidgetsBinding.instance.addObserver(SyncLifecycleObserver(runtime.syncCoordinator));
+  unawaited(runtime.syncCoordinator.start());
 }
 
 /// 应用根：ProviderScope + MaterialApp.router（§10.1 技术选型）。

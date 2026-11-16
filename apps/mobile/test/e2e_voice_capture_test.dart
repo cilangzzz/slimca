@@ -98,6 +98,12 @@ void main() {
     final clock = HlcClock(deviceId: deviceId);
     await ensureDefaultLedgers(database, clock);
 
+    // W7-8 集成注：beforeOpen 默认数据 seed（§5.4）+ 内置账本种子把 24 条
+    // seed 行同事务入队 sync_outbox——本用例断言的是本次语音提交的 3 条出网
+    // 行（entry + 2 产出行），先清空 seed 出网项（seed 入队语义由 core_db
+    // seed_idempotency_test 专属覆盖）。
+    await database.delete(database.syncOutbox).go();
+
     await tester.pumpWidget(
       ProviderScope(
         overrides: [

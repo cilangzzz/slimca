@@ -276,11 +276,17 @@ class LocalSyncEngine implements SyncEngine {
     // 游标推进（§6.2/§5.6⑰）：确定性处理完成（落库/仲裁跳过/确定性拒绝）
     // 的表推进到该表最后一条确定性 hlc；存在暂态失败的表停在其前一条，
     // 未处理行下轮重拉（幂等：重投递行经 LWW 等仲裁安全去重）。
+    // W7-8 集成修复：游标单调（只进不退，与 0002_sync_rpc.sql 的
+    // GREATEST(v_cursor, v_max_hlc)、InMemorySyncBackend 的 clamp 对齐）——
+    // 水位补投的迟到行 hlc 低于既有游标，比较原先是「不等于」即写入，
+    // 会把本地游标拉回迟到行之下，下轮 pull 以回退游标重投已投递区间
+    // （§6.2 增量语义被打破）。定宽 hlc 字典序=时间序（§6.3），严格大于才推进。
     final next = <String, String>{...since};
     for (final entry in apply.cursorByTable.entries) {
       final table = entry.key;
       final advanced = entry.value;
-      if (advanced != null && advanced != (since[table] ?? '')) {
+      final current = since[table] ?? '';
+      if (advanced != null && advanced.compareTo(current) > 0) {
         next[table] = advanced;
         await store.writeCursor(table, advanced);
       }

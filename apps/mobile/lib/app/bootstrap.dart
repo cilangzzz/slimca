@@ -2,30 +2,43 @@
 ///
 /// 装配顺序：
 /// 1. 打开应用主库（§10.1 Drift，core_db driftDatabase('slimca')）；
-/// 2. 确保本地 device_id（§5.6⑲ settings 本地件；devices 表正式注册 W7-8
-///    接入，§11 W7-8——届时同一标识映射到服务端设备行）；
+/// 2. 确保本地 device_id（§5.6⑲ settings 本地件）；
 /// 3. 构造 HLC 时钟（§6.3）；
 /// 4. 种子内置账本（§5.4：MVP 恒默认 money 账本；kcal 账本系统内置一个）；
 /// 5. 装配 feature_capture 录入域（§10.4「壳负责装配」）：CaptureGateway
-///    （core_db 仓库 + HLC 单例时钟）与 CaptureParser（core_ai 管线桥，
-///    dart-define 工厂缺省 Fake——见 lib/ai/capture_parser_factory.dart）。
+///    （core_db 仓库 + HLC 单例时钟）与 CaptureParser 装饰链（W7-8）：
+///    遥测埋点(raw_input 开关位) → raw_input 闸门(§3.7) → dart-define 工厂
+///    （core_ai adapter，缺省 Fake——见 lib/ai/capture_parser_factory.dart）；
+/// 6. W7-8 装配（§11.1）：本地 JSONL 遥测（§3.9）、raw_input 上云开关装载
+///    （§3.7 默认关）、同步栈（后端工厂 → 引擎 → 设备注册 → 协调器，§6.2）。
 ///
-/// 完成后以 override 注入 provider 容器：运行期 `appDatabaseProvider` /
-/// `hlcClockProvider` / `captureGatewayProvider` / `captureParserProvider`
-/// 同步可读，页面零等待（§2.3 步 0 无 spinner 冷启动）。
+/// 完成后以 [AppRuntime] 返回 override 清单与运行期句柄（遥测/开关/协调器）：
+/// `appDatabaseProvider` / `hlcClockProvider` / `captureGatewayProvider` /
+/// `captureParserProvider` / `syncEngineProvider` 等同步可读，页面零等待
+/// （§2.3 步 0 无 spinner 冷启动）。
 library;
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
 import 'package:drift/drift.dart';
 import 'package:feature_capture/feature_capture.dart';
+import 'package:feature_sync/feature_sync.dart';
 // Riverpod 3：Override 不在主库 show 清单内，由 misc.dart 导出。
 import 'package:flutter_riverpod/misc.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../ai/capture_parser_factory.dart';
+import '../ai/raw_input_gate_capture_parser.dart';
+import '../ai/telemetry_capture_parser.dart';
+import '../settings/raw_input_setting.dart';
+import '../sync/sync_backend_factory.dart';
+import '../sync/sync_coordinator.dart';
+import '../sync/telemetry_sync_backend.dart';
+import '../telemetry/telemetry.dart';
 import 'providers.dart';
 
 /// settings 表中的设备标识键（§5.6⑲：key-value 配置，value 一律 JSON）。
@@ -34,23 +47,108 @@ const String _kDeviceIdKey = 'device_id';
 /// 同步真值表名（§5.6⑯ outbox target_table；与 Drift 表 SQL 名一致）。
 const String _kLedgersTable = 'ledgers';
 
-/// 启动装配：返回 main() 注入 ProviderScope 的 overrides。
-Future<List<Override>> bootstrap() async {
+/// 启动装配产出：provider overrides + 运行期句柄（main() 持有）。
+class AppRuntime {
+  const AppRuntime({
+    required this.overrides,
+    required this.telemetry,
+    required this.rawInputPolicy,
+    required this.syncCoordinator,
+  });
+
+  /// ProviderScope overrides（含遥测/开关/同步引擎/协调器的注入）。
+  final List<Override> overrides;
+
+  /// 遥测服务（main() 挂崩溃钩子与冷启动漏斗，§3.9）。
+  final TelemetryService telemetry;
+
+  /// raw_input 上云开关持有（已按 settings 表初值装载，§3.7 默认关）。
+  final RawInputPolicy rawInputPolicy;
+
+  /// 同步协调器（main() start() + 生命周期观察者，§6.2）。
+  final SyncCoordinator syncCoordinator;
+}
+
+/// 启动装配：返回 main() 注入 ProviderScope 的 [AppRuntime]。
+Future<AppRuntime> bootstrap() async {
   final database = db.AppDatabase();
   final deviceId = await ensureDeviceId(database);
   final clock = HlcClock(deviceId: deviceId);
   await ensureDefaultLedgers(database, clock);
-  return [
-    appDatabaseProvider.overrideWithValue(database),
-    hlcClockProvider.overrideWithValue(clock),
-    // feature_capture 录入域装配（§10.4「壳负责装配」）：网关绑定同一
-    // AppDatabase 与应用级 HLC 单例时钟；解析器经 dart-define 工厂桥接
-    // core_ai 管线（缺省 HeuristicFakeLlmAdapter 离线桩）。
-    captureGatewayProvider.overrideWithValue(
-      createCaptureGateway(db: database, clock: clock),
-    ),
-    captureParserProvider.overrideWithValue(createCaptureParser()),
-  ];
+
+  // ── W7-8 · 遥测（§3.9）：本地 JSONL 落盘；装配失败回落 Noop（缺失只损
+  // 失监控数据、不影响业务，§6.1 纪律）。路径 = 应用 support 目录/telemetry。
+  final telemetry = await _createTelemetryService();
+
+  // ── W7-8 · raw_input 上云开关（§3.7 数据主权、§3.3 默认关）：读 settings
+  // 装入上次用户选择；坏值回落 false（本地件自愈，§5.6⑲）。
+  final policy = RawInputPolicy();
+  policy.enabled = await loadRawInputCloudEnabled(database);
+
+  // ── W7-8 · 同步栈（§6.2、§11.1「托管 Supabase 接入」）：后端工厂按
+  // dart-define 凭据装配（缺省本地回环，待用户凭据）→ 遥测装饰 → 引擎 →
+  // 协调器（设备注册 §5.6⑰ + 周期/前台切回触发）。
+  final backend = TelemetrySyncBackend(
+    inner: createSyncBackend(),
+    telemetry: telemetry,
+  );
+  final engine = LocalSyncEngine(
+    backend: backend,
+    outbox: DriftSyncOutboxStore(database),
+    store: DriftSyncLocalStore(database, deviceId: deviceId),
+    deviceId: deviceId,
+    clock: clock,
+  );
+  final coordinator = SyncCoordinator(
+    engine: engine,
+    registry: DeviceRegistry(database, backend),
+    telemetry: telemetry,
+  );
+
+  return AppRuntime(
+    overrides: [
+      appDatabaseProvider.overrideWithValue(database),
+      hlcClockProvider.overrideWithValue(clock),
+      // feature_capture 录入域装配（§10.4「壳负责装配」）：网关绑定同一
+      // AppDatabase 与应用级 HLC 单例时钟；解析器为 W7-8 装饰链——遥测
+      // 漏斗（§12 解析请求/成功/失败降级）→ raw_input 闸门（§3.7）→
+      // dart-define 工厂桥接 core_ai 管线（缺省离线桩）。
+      captureGatewayProvider.overrideWithValue(
+        createCaptureGateway(db: database, clock: clock),
+      ),
+      captureParserProvider.overrideWithValue(
+        TelemetryCaptureParser(
+          inner: RawInputGateCaptureParser(
+            inner: createCaptureParser(),
+            policy: policy,
+          ),
+          telemetry: telemetry,
+          rawInputCloud: () => policy.enabled,
+        ),
+      ),
+      // W7-8 运行期句柄注入（§10.4）。
+      telemetryServiceProvider.overrideWithValue(telemetry),
+      rawInputPolicyProvider.overrideWithValue(policy),
+      syncEngineProvider.overrideWithValue(engine),
+      syncCoordinatorProvider.overrideWithValue(coordinator),
+    ],
+    telemetry: telemetry,
+    rawInputPolicy: policy,
+    syncCoordinator: coordinator,
+  );
+}
+
+/// 本地遥测装配（§3.9）：support 目录下 telemetry 子目录 JSONL 落盘。
+/// path_provider 不可用/磁盘异常 → Noop 兜底（遥测永不阻塞业务）。
+Future<TelemetryService> _createTelemetryService() async {
+  try {
+    final support = await getApplicationSupportDirectory();
+    return await FileTelemetryService.open(
+      Directory('${support.path}${Platform.pathSeparator}telemetry'),
+    );
+  } on Object {
+    return const NoopTelemetryService();
+  }
 }
 
 /// 确保本地设备标识就绪并返回（§6.3：device_id = UUIDv7 前 12 个 hex 字符）。

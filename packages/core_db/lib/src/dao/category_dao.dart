@@ -7,6 +7,10 @@
 /// - is_preset=1 内置不可删（§5.4⑤）；
 /// - colorToken 引用 §8.2 语义 token 名而非裸色值（§5.4⑤ color_token 行）。
 /// 幂等：按 (kind, name) 查缺补插，已有行不动。
+///
+/// 出网纪律（§6.2 写路径，W5-6 补课）：categories 为 §5.1 同步真值表，
+/// seed 行与行快照同事务入队 sync_outbox（§5.6⑯）——双设备各自 seed 会
+/// 产生两套不同 id 的默认分类，必须经出网收敛（§11.1 W7-8 一致率验收）。
 library;
 
 import 'package:drift/drift.dart';
@@ -14,6 +18,7 @@ import 'package:drift/drift.dart';
 import '../app_database.dart';
 import '../uuid_v7.dart';
 import 'local_write_clock.dart';
+import 'sync_outbox_writer.dart';
 
 /// 账本 DAO 同目录；本文件只管分类。
 ///
@@ -51,10 +56,14 @@ const List<_SeedCategory> _kPresetCategories = [
 /// 分类 DAO（§5.4⑤ categories）。
 class CategoryDao {
   CategoryDao(this._db, {LocalWriteClock? clock})
-      : _clock = clock ?? LocalWriteClock(_db);
+      : _clock = clock ?? LocalWriteClock(_db),
+        _outbox = SyncOutboxWriter(_db);
 
   final AppDatabase _db;
   final LocalWriteClock _clock;
+
+  /// 出网入队器（§5.6⑯/§6.2）：seed 真值行同事务读回快照入队。
+  final SyncOutboxWriter _outbox;
 
   /// 内置分类 seed（空库首次打开由 [seedDefaultData] 调用）：缺哪条补哪条。
   Future<void> seedPresets() {
@@ -103,9 +112,10 @@ class CategoryDao {
 
   Future<void> _insert(_SeedCategory seed, int sort) async {
     final stamp = await _clock.next();
+    final id = generateUuidV7();
     await _db.into(_db.categories).insert(
           CategoriesCompanion.insert(
-            id: generateUuidV7(),
+            id: id,
             name: seed.name,
             icon: seed.icon,
             sort: sort,
@@ -123,6 +133,9 @@ class CategoryDao {
             deviceId: await _clock.deviceId(),
           ),
         );
+    // §6.2：seed 行同为同步真值表，行快照同事务入队（调用方 seedPresets
+    // 已在事务内，§5.6⑯）。
+    await _outbox.enqueueRow('categories', id);
   }
 }
 

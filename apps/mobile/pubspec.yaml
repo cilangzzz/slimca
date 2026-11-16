@@ -43,7 +43,8 @@ dependencies:
 
   # 单仓分包 path 依赖（§10.4）：ui_kit 主题/动效 token；core_domain 实体与仓库接口；
   # core_db Drift schema 与 day_summary 投影；feature_capture 唯一录入 UI（W3-4
-  # 收敛：壳采用其 CapturePage/网关/解析器注入点）；core_ai LLM 解析管线底座。
+  # 收敛：壳采用其 CapturePage/网关/解析器注入点）；core_ai LLM 解析管线底座；
+  # feature_sync 同步引擎与后端抽象（W7-8 §6.2 接线）。
   ui_kit:
     path: ../../packages/ui_kit
   core_domain:
@@ -54,6 +55,8 @@ dependencies:
     path: ../../packages/feature_capture
   core_ai:
     path: ../../packages/core_ai
+  feature_sync:
+    path: ../../packages/feature_sync
 
   # W2 接线直用依赖（core_db 的传递依赖提升为直接依赖，§10.1）：
   # drift——App 侧 reactive stream 直驱仪表盘（join/watch/事务，§10.1 数据层）；
@@ -61,6 +64,8 @@ dependencies:
   # uuid——UUIDv7 主键生成（§5.1 应用层生成、时间有序）与 §6.3 device_id
   # （取 UUIDv7 前 12 位 hex，复用 core_domain Hlc.nodeIdFromUuidV7）。
   uuid: ^4.6.0
+  # path_provider——W7-8 遥测落盘目录（§3.9 监控；support 目录/telemetry）。
+  path_provider: ^2.1.0
 
 dev_dependencies:
   flutter_test:
