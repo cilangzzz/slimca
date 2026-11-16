@@ -1,0 +1,82 @@
+# Slimca CI 骨架（W1）
+# 依据 docs/design/产品设计文档.md：
+#   §10.1 CI 选型：GitHub Actions（analyze + test + Android debug APK，Linux 基线）；
+#                iOS 签名/golden 走 Codemagic 云 Mac（§10.3 无 Mac 实况），不在本流水线。
+#   §10.3 环境实况：Android 构建链需 JDK 17（Temurin）。
+# 工程结构：pub workspaces（根 pubspec.yaml 声明 workspace，各包 resolution: workspace），
+#           故 pub get / analyze 在仓库根执行，一次性覆盖全部 workspace 成员。
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# 最小权限
+permissions:
+  contents: read
+
+# 同一 ref 并发只保留最新一次；PR 新 push 取消同 PR 旧 run，省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  flutter:
+    name: analyze / test / build apk (debug)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # §10.3：Android 构建链需 JDK 17（Temurin）
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # §10.1：Flutter 3.32.0 stable 固定版本（与开发机一致，零升级成本）；
+      # cache: true 即 pub 缓存（~/.pub-cache）
+      - name: Set up Flutter 3.32.0
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.0'
+          channel: stable
+          cache: true
+
+      # workspace 根统一解析（根 pubspec.yaml 声明 workspace）
+      - name: flutter pub get
+        run: flutter pub get
+
+      # 根目录执行即覆盖 workspace 全部包（分析器经根 package_config.json 解析各成员）
+      - name: flutter analyze
+        run: flutter analyze
+
+      # 逐包跑 test：根目录 flutter test 对 workspace 的行为不做保证，
+      # 遍历所有含 test/ 目录的成员最稳（新增包自动纳入）
+      - name: flutter test (workspace 全部含 test/ 的包)
+        run: |
+          set -e
+          status=0
+          for d in apps/mobile packages/*; do
+            if [ -d "$d/test" ]; then
+              echo "::group::flutter test: $d"
+              ( cd "$d" && flutter test ) || status=1
+              echo "::endgroup::"
+            fi
+          done
+          exit $status
+
+      # Android debug APK（§10.1：Android 先行上架）
+      - name: flutter build apk --debug
+        working-directory: apps/mobile
+        run: flutter build apk --debug
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: slimca-debug-apk
+          path: apps/mobile/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

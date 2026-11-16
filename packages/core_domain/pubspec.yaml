@@ -1,0 +1,13 @@
+name: core_domain
+resolution: workspace
+description: "Slimca 纯 Dart 领域层：统一事件模型实体、HLC 混合逻辑时钟、仓库接口与 SyncEngine 抽象（§10.4 core_domain）。"
+version: 0.0.1
+publish_to: none
+homepage:
+
+environment:
+  sdk: ^3.8.0
+
+dev_dependencies:
+  flutter_lints: ^5.0.0
+  test: ^1.25.0

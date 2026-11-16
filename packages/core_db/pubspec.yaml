@@ -1,0 +1,30 @@
+name: core_db
+resolution: workspace
+description: "Slimca 本地数据库层：Drift schema v1（21 张表）+ 连接管理（§5.1-§5.7、§10.4）。"
+version: 0.0.1
+homepage:
+
+environment:
+  sdk: ^3.8.0
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # §10.1 数据层选型 Drift 2.x：类型安全 + SQL 聚合（day_summary 投影）
+  # + reactive stream 直驱仪表盘。
+  drift: ^2.20.0
+  drift_flutter: ^0.2.0
+  path_provider: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  # drift_dev + build_runner：集成阶段统一执行
+  # `dart run build_runner build -d` 生成 app_database.g.dart（含全部
+  # 数据类/Companion/TableInfo）。schema 变更后必须重跑。
+  drift_dev: ^2.20.0
+  build_runner: ^2.4.0
+
+flutter:

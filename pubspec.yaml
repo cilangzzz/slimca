@@ -1,0 +1,15 @@
+name: slimca_workspace
+publish_to: none
+environment:
+  sdk: ^3.8.0
+workspace:
+  - apps/mobile
+  - packages/core_db
+  - packages/core_domain
+  - packages/core_ai
+  - packages/ui_kit
+  - packages/feature_dashboard
+  - packages/feature_capture
+  - packages/feature_ledger
+  - packages/feature_plan
+  - packages/feature_sync
