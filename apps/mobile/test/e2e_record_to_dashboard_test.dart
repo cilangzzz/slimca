@@ -1,27 +1,36 @@
 // E2E 专项验收（§11.1 W2 验收线：「手动记一笔→仪表盘环/支出卡即时更新」）。
 //
-// 与 widget_test.dart（W2 冒烟，覆盖壳导航+录入链路）互补，本用例聚焦
+// 与 widget_test.dart（W2+W3-4 冒烟，覆盖壳导航+录入链路）互补，本用例聚焦
 // 「写路径 → 仪表盘 reactive stream 即时重发」这一条验收线本身：
 // - 完整 App 冷启动（SlimcaApp：go_router 壳 + 4 Tab + 真仪表盘）；
 // - ProviderScope override 注入内存真库（Drift NativeDatabase.memory，
 //   走真实 schema/migration/seed 链路，非 mock）；
-// - 经 CapturePage 抽屉提交一笔支出（¥25.50 + 500 kcal）；
-// - 断言记录前后仪表盘支出卡/热量环卡数值即时变化（零导航、零重启，
-//   唯一驱动就是 drift watch 流重发 + Riverpod StreamProvider 重建）。
+// - 经 feature_capture CapturePage（§10.4 收敛：壳采用其 CapturePage 作
+//   唯一录入 UI）「仅记钱」表单提交一笔支出（¥25.50）；
+// - 断言记录前后仪表盘支出卡数值即时变化（零导航、零重启，唯一驱动就是
+//   drift watch 流重发 + Riverpod StreamProvider 重建）。
+//
+// W2 手动表单为纯 money 通道（§2.4-2「纯记账用户不被热量字段骚扰」）：
+// kcal 不经手动录入（热量语义走 W3-4 AI 流），故本用例断言 kind=expense、
+// 热量侧维持零值基线。
 //
 // 测试装配与冒烟同一口径：内存库 + 固定 device_id 的 HlcClock 直接
-// override（不跑 bootstrap()，避免测试写真实文件库）；内置账本种子用
-// ensureDefaultLedgers 手动补齐（ManualEntryService 依赖内置账本 id，§5.4）。
-// Windows 宿主缺 sqlite3 运行库时温和跳过（与 core_db 冒烟同策略）。
+// override（不跑 bootstrap()，避免测试写真实文件库）；feature_capture
+// 网关/解析器按 bootstrap() 同款工厂注入（§10.4）；内置账本种子用
+// ensureDefaultLedgers 手动补齐（§5.4）。Windows 宿主缺 sqlite3 运行库时
+// 温和跳过（与 core_db 冒烟同策略）。
 
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
 import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
+import 'package:feature_capture/feature_capture.dart'
+    show captureGatewayProvider, captureParserProvider, createCaptureGateway;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:slimca/ai/capture_parser_factory.dart';
 import 'package:slimca/app/bootstrap.dart';
 import 'package:slimca/app/providers.dart';
 import 'package:slimca/main.dart';
@@ -62,8 +71,13 @@ Future<db.AppDatabase?> _tryOpenMemoryDatabase() async {
 }
 
 void main() {
-  testWidgets('E2E：完整 App 启动 → CapturePage 记一笔支出 → 仪表盘支出卡/热量环即时更新',
+  testWidgets('E2E：完整 App 启动 → CapturePage 仅记钱表单记一笔支出 → 仪表盘支出卡即时更新',
       (WidgetTester tester) async {
+    // 放大视口：抽屉表单一屏放下，免滚动命中（与 capture_flow 同口径）。
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
     final database = await _tryOpenMemoryDatabase();
     if (database == null) {
       // Windows 宿主缺 sqlite3.dll：跳过（集成机有库，E2E 照常执行）。
@@ -71,9 +85,10 @@ void main() {
       print('SKIP：宿主缺 sqlite3 运行库，E2E 记账→仪表盘用例未执行');
       return;
     }
+    addTearDown(database.close);
 
     // 固定设备标识（§6.3 12 位 hex）+ 内置账本种子（§5.4：默认 money 账本
-    // + 内置 kcal 账本；ManualEntryService._builtinLedgerId 依赖）。
+    // + 内置 kcal 账本）。
     const deviceId = 'ABCDEF123456';
     final clock = HlcClock(deviceId: deviceId);
     await ensureDefaultLedgers(database, clock);
@@ -83,6 +98,10 @@ void main() {
         overrides: [
           appDatabaseProvider.overrideWithValue(database),
           hlcClockProvider.overrideWithValue(clock),
+          // feature_capture 装配（§10.4 壳负责装配，bootstrap() 同款工厂）。
+          captureGatewayProvider
+              .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
+          captureParserProvider.overrideWithValue(createCaptureParser()),
         ],
         child: const SlimcaApp(),
       ),
@@ -104,62 +123,69 @@ void main() {
         reason: '摄入/消耗指标与消耗卡基线为零');
     expect(find.text('0'), findsOneWidget, reason: '热量环心净 kcal 基线为零');
 
-    // ── 经 CapturePage 录入：午饭 500 kcal / ¥25.50（§11.1 W2 主线）──
+    // ── 经 CapturePage 录入：仅记钱表单记午饭 ¥25.50（§11.1 W2 主线）──
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('captureTitleField')), findsOneWidget);
-    expect(find.byKey(const Key('captureKcalField')), findsOneWidget);
-    expect(find.byKey(const Key('captureAmountField')), findsOneWidget);
+    // 缺省「钱+热量」档渲染 AI 输入区；切「仅记钱」→ W2 手动表单（§3.3）。
+    expect(find.byKey(const Key('capture_ai_input')), findsOneWidget);
+    await tester.tap(find.text('仅记钱'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('capture_amount_display')), findsOneWidget);
 
+    // 数字键盘输入 ¥25.50（分存储转换，杜绝浮点 §5.1）。
+    for (final key in const ['2', '5', '.', '5', '0']) {
+      await tester.tap(find.byKey(ValueKey('capture_key_$key')));
+    }
+    await tester.pump();
+    expect(find.text('25.50'), findsOneWidget);
+
+    // 标题（手动表单标题框无 key，按提示文案定位）。
     await tester.enterText(
-      find.byKey(const Key('captureTitleField')),
+      find.byWidgetPredicate(
+        (w) => w is TextField && w.decoration?.hintText == '标题（留空自动取分类名）',
+      ),
       '测试午餐',
-    );
-    await tester.enterText(find.byKey(const Key('captureKcalField')), '500');
-    await tester.enterText(
-      find.byKey(const Key('captureAmountField')),
-      '25.50',
     );
     await tester.pump();
 
-    await tester.tap(find.byKey(const Key('captureSubmitButton')));
+    await tester.tap(find.byKey(const Key('capture_submit')));
     await tester.pumpAndSettle(); // 抽屉弹簧反向退场 + 明细流重发落界面
 
     // 抽屉已收起（§9.3#3），回不到录入面。
-    expect(find.byKey(const Key('captureSubmitButton')), findsNothing);
+    expect(find.byKey(const Key('capture_submit')), findsNothing);
     expect(find.text('记一笔'), findsNothing);
 
     // ── 记录后：仪表盘即时更新（唯一驱动=drift watch 流重发）──
-    // 支出卡：¥0 → ¥25.50（§3.2 卡片墙第 2 项）。
+    // 空态引导已被今日记录卡替换；支出卡：¥0 → ¥25.50（§3.2 卡片墙第 2 项）。
+    expect(find.text('记一件事，钱和卡路里一起入账'), findsNothing,
+        reason: '空态引导已被记录卡替换');
     expect(find.text('¥0'), findsNothing, reason: '旧零值已被流重发改写');
     expect(find.text('¥25.50'), findsWidgets,
         reason: '支出卡金额即时更新（今日记录卡摘要同源复现）');
+    expect(find.text('测试午餐'), findsOneWidget, reason: '今日记录卡出现该条目');
 
-    // 热量环卡（§3.2 第 1 项）：环心净 kcal 0 → 500；摄入指标行同步。
-    expect(find.text('摄入 0 kcal'), findsNothing, reason: '摄入指标已更新');
-    expect(find.text('500 kcal'), findsOneWidget, reason: '热量环卡摄入指标=500');
-    expect(find.text('0 kcal'), findsNWidgets(2),
-        reason: '消耗指标与消耗卡仍为 0（未记运动）');
-    expect(find.text('0'), findsNothing, reason: '环心净 kcal 已更新');
-    expect(find.text('500'), findsOneWidget, reason: '热量环心净 kcal=摄入 500');
+    // 热量侧零值基线不变（W2 手动表单为纯 money 通道，§2.4-2）。
+    expect(find.text('0 kcal'), findsNWidgets(3),
+        reason: '摄入/消耗指标与消耗卡仍为零');
+    expect(find.text('0'), findsOneWidget, reason: '热量环心净 kcal 仍为零');
 
-    // 今日记录卡出现该条目（§11 W2 流水面）。
-    expect(find.text('测试午餐'), findsOneWidget);
-
-    // ── 落库保真：真库中主干 + 拆行（§5.2 facet：热量行/金额行各自成行）──
+    // ── 落库保真：真库中主干 + money 拆行（§5.2 facet）──
     final entries = await database.select(database.entries).get();
     expect(entries, hasLength(1), reason: '一笔事件一条 entries 主干（§5.2①）');
+    expect(entries.single.kind, 'expense',
+        reason: '仅金额 → kind=expense（§5.2①，收入方向由行级 direction 表达）');
+    expect(entries.single.source, 'manual', reason: '手动通道（§5.2① source）');
+    expect(entries.single.status, 'confirmed', reason: '手动路径不走 draft');
+    expect(entries.single.aiParseId, isNull, reason: '手动路径无 AI 溯源');
+    expect(entries.single.title, '测试午餐');
     final lines = await database.select(database.entryLines).get();
-    final moneyLines =
-        lines.where((l) => l.type == 'money').toList();
-    final kcalLines =
-        lines.where((l) => l.type == 'calorie').toList();
+    final moneyLines = lines.where((l) => l.type == 'money').toList();
+    final kcalLines = lines.where((l) => l.type == 'calorie').toList();
     expect(moneyLines, hasLength(1), reason: '金额 facet 行（§5.3）');
     expect(moneyLines.single.amount, 2550, reason: '¥25.50 → 2550 分（§5.1）');
-    expect(kcalLines, hasLength(1), reason: '热量 facet 行（§5.3）');
-    expect(kcalLines.single.amount, 500);
-    expect(entries.single.kind, 'mixed', reason: '钱+热量同记 → kind=mixed（§5.2①）');
-
-    await database.close();
+    expect(moneyLines.single.direction, 'out', reason: '支出方向（§5.2②）');
+    expect(moneyLines.single.confidence, isNull,
+        reason: '人工行无置信度（§5.2② confidence AI 产出行必填）');
+    expect(kcalLines, isEmpty, reason: 'W2 手动表单无热量字段（§2.4-2）');
   });
 }

@@ -5,10 +5,14 @@
 /// 2. 确保本地 device_id（§5.6⑲ settings 本地件；devices 表正式注册 W7-8
 ///    接入，§11 W7-8——届时同一标识映射到服务端设备行）；
 /// 3. 构造 HLC 时钟（§6.3）；
-/// 4. 种子内置账本（§5.4：MVP 恒默认 money 账本；kcal 账本系统内置一个）。
+/// 4. 种子内置账本（§5.4：MVP 恒默认 money 账本；kcal 账本系统内置一个）；
+/// 5. 装配 feature_capture 录入域（§10.4「壳负责装配」）：CaptureGateway
+///    （core_db 仓库 + HLC 单例时钟）与 CaptureParser（core_ai 管线桥，
+///    dart-define 工厂缺省 Fake——见 lib/ai/capture_parser_factory.dart）。
 ///
 /// 完成后以 override 注入 provider 容器：运行期 `appDatabaseProvider` /
-/// `hlcClockProvider` 同步可读，页面零等待（§2.3 步 0 无 spinner 冷启动）。
+/// `hlcClockProvider` / `captureGatewayProvider` / `captureParserProvider`
+/// 同步可读，页面零等待（§2.3 步 0 无 spinner 冷启动）。
 library;
 
 import 'dart:convert';
@@ -16,10 +20,12 @@ import 'dart:convert';
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
 import 'package:drift/drift.dart';
+import 'package:feature_capture/feature_capture.dart';
 // Riverpod 3：Override 不在主库 show 清单内，由 misc.dart 导出。
 import 'package:flutter_riverpod/misc.dart';
 import 'package:uuid/uuid.dart';
 
+import '../ai/capture_parser_factory.dart';
 import 'providers.dart';
 
 /// settings 表中的设备标识键（§5.6⑲：key-value 配置，value 一律 JSON）。
@@ -37,6 +43,13 @@ Future<List<Override>> bootstrap() async {
   return [
     appDatabaseProvider.overrideWithValue(database),
     hlcClockProvider.overrideWithValue(clock),
+    // feature_capture 录入域装配（§10.4「壳负责装配」）：网关绑定同一
+    // AppDatabase 与应用级 HLC 单例时钟；解析器经 dart-define 工厂桥接
+    // core_ai 管线（缺省 HeuristicFakeLlmAdapter 离线桩）。
+    captureGatewayProvider.overrideWithValue(
+      createCaptureGateway(db: database, clock: clock),
+    ),
+    captureParserProvider.overrideWithValue(createCaptureParser()),
   ];
 }
 

@@ -96,6 +96,14 @@ abstract interface class SyncOutboxStore {
   /// push 成功后回写 acked_at（§6.2 本地回写步）。
   Future<void> markAcked(String outboxId, {required int ackedAt});
 
+  /// 丢弃一条未确认的出网项（W5-6 拒绝分类回处理，§6.2 服务端校验）。
+  ///
+  /// 适用：schema_ver 超档（本端永不理解该行）、hlc 单调失败/
+  /// baseRevision 冲突/墓碑冲突（服务端已有更新版本，出网条目作废，
+  /// 由 pull 采纳服务端行）、delete 幂等（目标行本就不存在）。
+  /// 与 [markAcked] 区分：drop 的条目没有被服务端确认，只是不再重试。
+  Future<void> drop(String outboxId);
+
   /// 未确认数量（顶栏小圆点同步状态的数据源，§6.1 原则 1）。
   Future<int> pendingCount();
 }
@@ -157,6 +165,16 @@ enum SyncRejectionReason {
   schemaVerRejected('schema_ver'),
   rowMissing('row_missing'),
   hlcNonMonotonic('hlc_non_monotonic'),
+
+  /// baseRevision 乐观校验失败（§5.6⑯ base_revision 行）：服务端行的权威
+  /// revision 与出网快照声明的不一致，说明期间有他端写入——后写者以
+  /// HLC LWW 仲裁（§6.5），本端该条出网作废、经 pull 采纳服务端版本。
+  baseRevisionConflict('base_revision_conflict'),
+
+  /// 服务端行已是墓碑而本次 upsert 携带存活行：「墓碑拒绝复活」
+  /// （§6.5 删除行「删后编辑保持删除胜出」）必须在服务端强制，
+  /// 否则删端 pull 存活行时会被本地墓碑挡下、造成双端分叉。
+  tombstoneConflict('tombstone_conflict'),
   unknown('unknown');
 
   const SyncRejectionReason(this.wire);

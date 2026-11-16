@@ -7,7 +7,8 @@
 /// 承担；本库不重复实现仓库，只做 feature 层编排：
 /// - W2 手动写路径：entries(kind=expense) + entry_lines(type=money) 的实体
 ///   构造与同事务落库（§5.2 facet 拆行），HLC 由注入的 [dom.HlcClock]
-///   签发（§6.3 定宽编码）；
+///   签发（§6.3 定宽编码）；W5-6 起 entries/entry_lines 行快照同事务入队
+///   sync_outbox（§6.2 写路径纪律）——
 /// - W2 修正闭环编排：主干字段与金额行的变更分流 + corrections 审计行落库
 ///   （§5.6⑮ 明确「审计行由调用方落库」，仓库层无从得知字段级前后值）；
 /// - W3-4 AI 写路径（§11.1「AI 双解析闭环（文本）」）：确认卡/复记/降级
@@ -94,6 +95,29 @@ class CaptureGateway {
         revision: revision ?? 1,
         deviceId: clock.deviceId,
       );
+
+  /// 行快照入队（§5.6⑯ payload=实体 toJson 同构快照）：entries/entry_lines
+  /// 行级同步协议表随业务写同事务入队 sync_outbox（§6.2 写路径纪律，
+  /// W5-6 SyncEngine 出队后上送；幂等键=outbox.id）。
+  Future<void> _enqueueRowSnapshot(
+    Map<String, Object?> snapshot, {
+    required String table,
+    required String rowId,
+    required dom.SyncMeta meta,
+  }) async {
+    await db.into(db.syncOutbox).insert(
+          cdb.SyncOutboxCompanion.insert(
+            id: _newId(),
+            targetTable: table,
+            rowId: rowId,
+            op: dom.OutboxOp.upsert.wire,
+            payload: jsonEncode(snapshot),
+            baseRevision: Value(meta.revision),
+            hlc: meta.hlc,
+            createdAt: meta.updatedAt,
+          ),
+        );
+  }
 
   /// 追加一条 corrections 审计行（§5.6⑮ append-only）。
   ///
@@ -186,9 +210,22 @@ class CaptureGateway {
     );
     // 写路径经仓库接口落库（§3.3「提交经 EntryRepository 落库」）；
     // Drift 嵌套事务：内层（仓库自身的 transaction）join 外层事务。
+    // §6.2 写路径纪律：entries/entry_lines 行快照与业务行同事务入队 outbox。
     await db.transaction(() async {
       await entries.upsert(entry);
       await entryLines.upsert(line);
+      await _enqueueRowSnapshot(
+        entry.toJson(),
+        table: 'entries',
+        rowId: entry.id,
+        meta: entry.meta,
+      );
+      await _enqueueRowSnapshot(
+        line.toJson(),
+        table: 'entry_lines',
+        rowId: line.id,
+        meta: line.meta,
+      );
     });
     return entry.id;
   }
@@ -406,6 +443,13 @@ class CaptureGateway {
         meta: _newMeta(),
       );
       await entries.upsert(entry);
+      // §6.2 写路径纪律：主干行快照同事务入队（§5.6⑯）。
+      await _enqueueRowSnapshot(
+        entry.toJson(),
+        table: 'entries',
+        rowId: entry.id,
+        meta: entry.meta,
+      );
 
       String? calorieLineId;
       String? moneyLineId;
@@ -433,6 +477,12 @@ class CaptureGateway {
           meta: _newMeta(),
         );
         await entryLines.upsert(line);
+        await _enqueueRowSnapshot(
+          line.toJson(),
+          table: 'entry_lines',
+          rowId: line.id,
+          meta: line.meta,
+        );
         calorieLineId = line.id;
         // food_items 逐菜品（§7.3「items[] → food_items 逐菜品」）。
         for (final item in request.items) {
@@ -480,6 +530,12 @@ class CaptureGateway {
           meta: _newMeta(),
         );
         await entryLines.upsert(line);
+        await _enqueueRowSnapshot(
+          line.toJson(),
+          table: 'entry_lines',
+          rowId: line.id,
+          meta: line.meta,
+        );
         moneyLineId = line.id;
       }
 

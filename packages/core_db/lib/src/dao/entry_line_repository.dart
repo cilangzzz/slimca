@@ -104,7 +104,9 @@ class DriftEntryLineRepository implements domain.EntryLineRepository {
         _guardMoneyImmutability(line, existing, parent);
       }
       await _db.into(_db.entryLines).insertOnConflictUpdate(_toCompanion(line));
-      await _recomputeDay(parent.date);
+      // 投影联动（§5.6）：传事件 id（_requireParent 解析归属日），与 supersede
+      // 同口径——勿传 date，否则 _requireParent 会拿日期查 entries.id。
+      await _recomputeDay(line.entryId);
     });
   }
 

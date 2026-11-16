@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ui_kit/ui_kit.dart';
 
+import 'package:feature_capture/feature_capture.dart'
+    show CaptureSeed, showCaptureSheet;
+
 import '../../app/providers.dart';
 import '../../common/format.dart';
-import '../capture/capture_page.dart';
 import 'dashboard_state.dart';
 
 /// 日期仪表盘（§3.2；W2：卡片墙由明细行 reactive stream 实时驱动——
@@ -328,6 +330,14 @@ class _CalorieRingCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 _MetricLine(label: '摄入', value: '${day.kcalIn} kcal'),
                 _MetricLine(label: '消耗', value: '${day.kcalOut} kcal'),
+                // 净热量口径（§3.5 健身手动记录进净热量：净 = 摄入 − 消耗，
+                // W5-6 核对标注；burn 行已并入下方 kcalOut 求和）。
+                Text(
+                  '净 = 摄入 − 消耗',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
                 _MetricLine(
                   label: '预算',
                   value: budget > 0
@@ -529,9 +539,10 @@ class _EntryTile extends ConsumerWidget {
         ),
       ),
       // 编辑：弹簧抽屉预填原事件；保存走修正链（§6.5 金额不可变→correction 行）。
-      onTap: () => showSlimcaSpringSheet(
-        context: context,
-        builder: (_) => CapturePage(editEntryId: view.entryId),
+      // W3-4 收敛：抽屉 = feature_capture CapturePage（§10.4 唯一录入 UI）。
+      onTap: () => showCaptureSheet(
+        context,
+        seed: CaptureSeed(editEntryId: view.entryId),
       ),
       trailing: IconButton(
         icon: const Icon(Icons.delete_outline),

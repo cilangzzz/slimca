@@ -1,28 +1,36 @@
 // E2E 专项验收（§11.1 W3-4 验收线：「打开 → 确认」AI 双解析闭环（文本路径））。
 //
-// 与 widget_test.dart（默认 FakeParser 冒烟）、e2e_record_to_dashboard_test.dart
+// 与 widget_test.dart（缺省离线桩冒烟）、e2e_record_to_dashboard_test.dart
 // （W2 手动记一笔→仪表盘即时更新）互补，本用例按 W3-4 验收口径逐环断言：
-// - FakeParser 注入（override aiParserProvider，确定性脚本桩，零真实网络）；
+// - 注入式确定性脚本桩（core_ai FakeLlmAdapter.scripted → LlmAiParser 完整
+//   管线 → CoreAiCaptureParser 桥，§10.4 收敛装配；零真实网络）；
 // - 文本「早餐两个包子 ¥6」→ 解析 → 确认卡出现，热量/金额 count-up 播完
 //   后数值稳定（§9.3#4）；
-// - 确认 → entries + calorie（500 kcal 类）+ money（600 分）行落库；
-// - corrections 审计随确认落库（§5.6⑮：确认卡上改标题 → 字段级审计行）；
-// - 仪表盘即时更新（唯一驱动=drift watch 流重发，§2.3 步 5/6）。
+// - 确认 → entries + calorie（500 kcal 类）+ money（600 分）行 + food_items
+//   落库；
+// - corrections 审计随确认落库（§5.6⑮：确认卡上改标题 → 字段级审计行，
+//   收敛后 source=ai_corrected——「AI 初值 vs 用户确认」差异审计）；
+// - ai_parses 留痕（§5.6⑭）+ 仪表盘即时更新（唯一驱动=drift watch 流重发）。
 //
 // 测试装配与既有 e2e 同一口径：内存 Drift 真库 + 固定 device_id 的 HlcClock
-// 直接 override（不跑 bootstrap()）；内置账本种子 ensureDefaultLedgers 补齐
-// （AI 网关落库依赖 money/kcal 内置账本 id，§5.4）。Windows 宿主缺 sqlite3
-// 运行库时温和跳过（与 core_db 冒烟同策略）。
+// 直接 override（不跑 bootstrap()）；feature_capture 网关按 bootstrap() 同款
+// 工厂注入（§10.4）；内置账本种子 ensureDefaultLedgers 补齐（§5.4）。Windows
+// 宿主缺 sqlite3 运行库时温和跳过（与 core_db 冒烟同策略）。
 
+import 'dart:convert';
+
+import 'package:core_ai/core_ai.dart';
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
 import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
+import 'package:feature_capture/feature_capture.dart'
+    show captureGatewayProvider, captureParserProvider, createCaptureGateway;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:slimca/ai/ai_parser.dart';
+import 'package:slimca/ai/capture_parser_bridge.dart';
 import 'package:slimca/app/bootstrap.dart';
 import 'package:slimca/app/providers.dart';
 import 'package:slimca/main.dart';
@@ -56,49 +64,57 @@ Future<db.AppDatabase?> _tryOpenMemoryDatabase() async {
   }
 }
 
-/// 注入式确定性 FakeParser（任务验收口径：FakeParser 注入，测试零真实网络）。
+/// 注入式确定性脚本桩（任务验收口径：FakeParser 注入改为 core_ai 适配器
+/// 注入——FakeLlmAdapter.scripted 产受约束 JSON，经 LlmAiParser 完整管线
+/// （受约束解码 + 校验 + §7.3 映射）与 CoreAiCaptureParser 桥，§10.4）。
 ///
 /// 「早餐两个包子 ¥6」→ 500 kcal（两个包子量级，§11.1 W3-4 验收「500kcal 类」）
 /// + 600 分（¥6，§5.1 分存储）；行级置信度取 §7.2 示例同款 0.62/0.93
 /// （黄/绿三色点各现一次，§7.3 口径）。同输入恒同结果，无随机/时钟/网络。
-class _ScriptedFakeParser implements AiParser {
-  const _ScriptedFakeParser();
+CoreAiCaptureParser _scriptedParser() {
+  const constrainedJson =
+      '{"title":"早餐两个包子 ¥6","kind":"mixed",'
+      '"parse_notes":"份量按两个包子估计；金额来自文本「¥6」",'
+      '"lines":['
+      '{"type":"calorie","amount_kcal":500,"confidence":0.62,'
+      '"category_hint":"餐饮-早餐","items":[]},'
+      '{"type":"money","amount_minor":600,"currency":"CNY",'
+      '"confidence":0.93,"ledger_hint":"default"}]}';
+  return CoreAiCaptureParser(
+    adapter: FakeLlmAdapter.scripted(
+      [jsonEncode(jsonDecode(constrainedJson))],
+      providerId: 'fake-scripted',
+      modelId: 'e2e-deterministic-v1',
+    ),
+  );
+}
 
-  @override
-  Future<AiParseResult> parse(AiParseRequest request) async => AiParseResult(
-        title: request.input, // 标题=原句（与默认 FakeParser 同纪律，§2.3 步 3）
-        kindHint: 'mixed',
-        lines: <AiParsedLine>[
-          const AiParsedLine(
-            type: AiLineType.calorie,
-            amount: 500,
-            confidence: 0.62,
-            categoryHint: '餐饮-早餐',
-            items: [],
-          ),
-          const AiParsedLine(
-            type: AiLineType.money,
-            amount: 600,
-            currency: 'CNY',
-            confidence: 0.93,
-            ledgerHint: 'default',
-          ),
-        ],
-        parseNotes: '份量按两个包子估计；金额来自文本「¥6」',
-        confidence: 0.62,
-        provider: 'fake-scripted',
-        model: 'e2e-deterministic-v1',
-        promptVersion: 'e2e-v1',
-        latencyMs: 0,
-        costMicro: 0,
-      );
+/// 小步轮询等待控件出现（解析中呼吸态 SlimcaBreath 是无限循环动画，
+/// pumpAndSettle 永不收敛——与 feature_capture capture_flow_test 同策略）。
+Future<void> _pumpUntilFound(
+  WidgetTester tester,
+  Finder finder,
+) async {
+  for (var i = 0; i < 150; i++) {
+    if (finder.evaluate().isNotEmpty) {
+      await tester.pump();
+      return;
+    }
+    await tester.pump(const Duration(milliseconds: 20));
+  }
+  fail('等待控件超时: $finder');
 }
 
 void main() {
   testWidgets(
-      'E2E：FakeParser 注入 → 「早餐两个包子 ¥6」→ 确认卡（count-up 后稳定）→ '
-      '确认 → entry + calorie/money 行 + corrections 审计 + 仪表盘即时更新',
+      'E2E：脚本桩（core_ai 管线）注入 → 「早餐两个包子 ¥6」→ 确认卡（count-up 后稳定）→ '
+      '确认 → entry + calorie/money 行 + corrections 审计（ai_corrected）+ 仪表盘即时更新',
       (WidgetTester tester) async {
+    // 放大视口：抽屉确认卡一屏放下，免滚动命中（与 capture_flow 同口径）。
+    tester.view.physicalSize = const Size(900, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
     final database = await _tryOpenMemoryDatabase();
     if (database == null) {
       // Windows 宿主缺 sqlite3.dll：跳过（集成机有库，E2E 照常执行）。
@@ -118,8 +134,11 @@ void main() {
         overrides: [
           appDatabaseProvider.overrideWithValue(database),
           hlcClockProvider.overrideWithValue(clock),
-          // FakeParser 注入（§11.1 W3-4 验收：默认 mock 路径的显式注入形态）。
-          aiParserProvider.overrideWithValue(const _ScriptedFakeParser()),
+          // 脚本桩注入（§11.1 W3-4 验收：默认 mock 路径的显式注入形态，
+          // 收敛后注入点 = captureParserProvider，实现 = core_ai 管线桥）。
+          captureGatewayProvider
+              .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
+          captureParserProvider.overrideWithValue(_scriptedParser()),
         ],
         child: const SlimcaApp(),
       ),
@@ -132,39 +151,58 @@ void main() {
     // ── 打开录入抽屉 → 一句话输入 → 解析（§3.3 步 2-3）──────────────
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('aiTextField')), findsOneWidget);
-    expect(find.byKey(const Key('aiParseButton')), findsOneWidget);
+    expect(find.byKey(const Key('capture_ai_input')), findsOneWidget);
+    expect(find.byKey(const Key('capture_parse_button')), findsOneWidget);
 
     await tester.enterText(
-      find.byKey(const Key('aiTextField')),
+      find.descendant(
+        of: find.byKey(const Key('capture_ai_input')),
+        matching: find.byType(TextField),
+      ),
       '早餐两个包子 ¥6',
     );
     await tester.pump();
-    await tester.tap(find.byKey(const Key('aiParseButton')));
-    // 确认卡出现（§2.3 步 3「抽屉原地转确认卡」；解析为注入桩即时返回）。
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('aiConfirmButton')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('capture_parse_button')));
+    // 解析中呼吸态/确认卡置信度三色点均为无限循环动画（SlimcaBreath/
+    // SlimcaConfidenceDot），pumpAndSettle 永不收敛：轮询等确认卡出现，
+    // 再推固定时长让 count-up（800ms）播完到终值（§9.3#4）。
+    await _pumpUntilFound(
+      tester,
+      find.byKey(const Key('capture_confirm_submit')),
+    );
+    await tester.pump(const Duration(milliseconds: 900));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const Key('capture_confirm_submit')), findsOneWidget);
 
     // ── count-up 稳定（§9.3#4：数值滚到终值后不再变化）──────────────
     // pumpAndSettle 已收敛全部单次动画；再推固定时长两次，断言终值不变。
-    expect(find.text('500 kcal'), findsOneWidget, reason: '热量 count-up 终值');
-    expect(find.text('¥6'), findsOneWidget, reason: '金额 count-up 终值（600 分）');
+    // 确认卡热量区：SlimcaCountUp 整数 + 独立「kcal」单位文本；金额区
+    // SlimcaMoneyCountUp 恒两位小数（§5.1 展示换算）。
+    expect(find.text('500'), findsOneWidget, reason: '热量 count-up 终值');
+    expect(find.text('kcal'), findsOneWidget);
+    expect(find.text('¥6.00'), findsOneWidget, reason: '金额 count-up 终值（600 分）');
+    expect(find.text('AI 解析初值（§7.1）'), findsOneWidget, reason: '来源徽标');
+    expect(find.text('解析备注：份量按两个包子估计；金额来自文本「¥6」'),
+        findsOneWidget, reason: 'parse_notes 上卡（§7.3）');
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('500 kcal'), findsOneWidget, reason: 'count-up 已稳定');
-    expect(find.text('¥6'), findsOneWidget, reason: 'count-up 已稳定');
+    expect(find.text('500'), findsOneWidget, reason: 'count-up 已稳定');
+    expect(find.text('¥6.00'), findsOneWidget, reason: 'count-up 已稳定');
 
     // ── 确认卡上修正标题（§2.3 步 4「先拍后改」→ corrections 审计行）──
     await tester.enterText(
-      find.byKey(const Key('aiConfirmTitleField')),
+      find.descendant(
+        of: find.byKey(const Key('capture_confirm_title')),
+        matching: find.byType(TextField),
+      ),
       '早餐两个包子',
     );
     await tester.pump();
-    await tester.tap(find.byKey(const Key('aiConfirmButton')));
+    await tester.tap(find.byKey(const Key('capture_confirm_submit')));
     await tester.pumpAndSettle(); // 确认落库 + 抽屉弹簧收起 + 明细流重发
 
     // 抽屉已收起：确认按钮不在树上（§2.3 步 5「卡片飞入仪表盘槽位」）。
-    expect(find.byKey(const Key('aiConfirmButton')), findsNothing);
+    expect(find.byKey(const Key('capture_confirm_submit')), findsNothing);
 
     // ── 仪表盘即时更新（唯一驱动=drift watch 流重发，§2.3 步 5/6）────
     // 今日记录卡新条目（确认标题）+ 摘要「摄入 500 kcal · ¥6」。
@@ -210,24 +248,32 @@ void main() {
     expect(moneyLines.single.currency, 'CNY');
     expect(moneyLines.single.confidence, 0.93);
 
-    // ── ai_parses 留痕（§5.6⑭）─────────────────────────────────────
+    // ── ai_parses 留痕（§5.6⑭）：网关 saveAiParse 落一行，raw_output=
+    //    CaptureParseResult JSON（缓存回放格式），provider 透传脚本桩值。
     final parses = await database.select(database.aiParses).get();
-    expect(parses, hasLength(1));
+    expect(parses, hasLength(1), reason: '收敛后单行留痕（core_ai 内部缓存为'
+        '内存 memo，不双写 ai_parses）');
     expect(parses.single.id, entry.aiParseId);
     expect(parses.single.inputKind, 'text');
     expect(parses.single.provider, 'fake-scripted');
     expect(parses.single.inputHash, isNotEmpty);
+    // raw_output 是 CaptureParseResult JSON（回放键）——含收敛桥映射的行。
+    final replay =
+        jsonDecode(parses.single.rawOutput) as Map<String, Object?>;
+    expect(replay['title'], '早餐两个包子 ¥6');
+    expect((replay['lines']! as List<Object?>), hasLength(2));
 
     // ── corrections 审计（§5.6⑮：改标题 → 字段级 append-only 一行）──
-    // 热量/金额未改 → 不落审计（确认 ≠ 修正）；仅标题一处修正。
+    // 热量/金额未改 → 不落审计（确认 ≠ 修正）；仅标题一处修正；
+    // source=ai_corrected（W3-4 收敛口径：「AI 初值 vs 用户确认」差异）。
     final corrections = await database.select(database.corrections).get();
     expect(corrections, hasLength(1), reason: '仅标题一处修正（§5.6⑮）');
     final audit = corrections.single;
     expect(audit.entryId, entry.id);
     expect(audit.lineId, isNull, reason: '主干字段修正 line_id=NULL（§5.6⑮）');
     expect(audit.field, 'title');
-    expect(audit.oldValue, '早餐两个包子 ¥6', reason: 'old_value=解析原值');
+    expect(audit.oldValue, '早餐两个包子 ¥6', reason: 'old_value=AI 初值');
     expect(audit.newValue, '早餐两个包子', reason: 'new_value=用户确认值');
-    expect(audit.source, 'user');
+    expect(audit.source, 'ai_corrected', reason: '§5.6⑮ 差异审计来源');
   });
 }

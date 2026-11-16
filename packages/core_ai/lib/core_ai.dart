@@ -11,7 +11,9 @@
 /// - input_hash 缓存（§5.6⑭ ai_parses：<7 天时效、UUIDv7 id 内嵌时间判定；
 ///   内存实现与 Drift 实现）；
 /// - 四级降级接口（§7.4：一级内建于 StructuredFailure，二三四级留接口）；
-/// - 确定性 Fake（FakeLlmAdapter / FakeAiParser，测试与预览用）。
+/// - 确定性 Fake（FakeLlmAdapter / FakeAiParser，测试与预览用）；
+/// - 缺省离线桩（HeuristicFakeLlmAdapter：正则抽取产 §7.2 受约束 JSON，
+///   宿主未配 API key 时经 LlmAiParser 走完整管线的「默认 mock」，§11.1）。
 ///
 /// 分层边界（§10.4）：本库产出解析草稿（ParseSuccess/StructuredFailure），
 /// entries/entry_lines 实体化、HLC 发戳与落库由宿主 feature 层经 core_db
@@ -23,6 +25,7 @@ export 'src/cache/drift_ai_parse_cache.dart';
 export 'src/degrade/degrade_hooks.dart';
 export 'src/fake/fake_adapter.dart';
 export 'src/fake/fake_parser.dart';
+export 'src/fake/heuristic_fake_adapter.dart';
 export 'src/llm/llm_adapter.dart';
 export 'src/llm/openai_adapter.dart';
 export 'src/parse/ai_parser.dart';
