@@ -9,6 +9,7 @@ import 'app/bootstrap.dart';
 import 'app/router.dart';
 import 'app/theme.dart';
 import 'sync/sync_coordinator.dart';
+import 'telemetry/frame_telemetry.dart';
 
 Future<void> main() async {
   // §11 W2 接线：runApp 前完成异步装配（开库、device_id、内置账本种子），
@@ -48,6 +49,14 @@ Future<void> main() async {
       },
     );
   }));
+
+  // ── W9-10 真机帧率埋点（§9.4 帧预算、§11.1 W9-10「北极星实测·真机帧率」）：
+  // 引擎按批回送真实 FrameTiming → 聚合 frame_raster_ms/frame_dropped 落
+  // JSONL（§3.9 标量口径）。debug 不采（JIT+断言开销失真）——实测口径=
+  // 真机 profile/release；本机无真机，帧率数字待真机实测（M2 闸门口径）。
+  if (!kDebugMode) {
+    FrameTelemetry.attach(runtime.telemetry);
+  }
 
   // ── W7-8 同步启动（§6.2 同步时机：启动后一轮 + 周期定时 + 前台切回）。
   // 本地优先：start() 内部吞掉分区异常，绝不阻塞 UI（§6.1 原则 1）。

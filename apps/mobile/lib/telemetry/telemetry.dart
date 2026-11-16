@@ -12,11 +12,13 @@
 library;
 
 export 'file_telemetry_service.dart' show FileTelemetryService;
+export 'frame_telemetry.dart' show FrameStats, FrameTelemetry;
 export 'noop_telemetry_service.dart' show NoopTelemetryService;
 export 'package:core_domain/core_domain.dart'
     show
         TelemetryEvent,
         TelemetryFunnel,
         TelemetryKind,
+        TelemetryMetricName,
         TelemetryPrivacy,
         TelemetryService;

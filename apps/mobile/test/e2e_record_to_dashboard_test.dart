@@ -35,6 +35,8 @@ import 'package:slimca/app/bootstrap.dart';
 import 'package:slimca/app/providers.dart';
 import 'package:slimca/main.dart';
 
+import 'test_support.dart';
+
 /// 判断是否为「宿主缺 sqlite3 运行库」类错误（复刻 core_db test_support 口径）。
 bool _isSqliteLibraryMissing(Object error) {
   final msg = error.toString().toLowerCase();
@@ -93,6 +95,10 @@ void main() {
     final clock = HlcClock(deviceId: deviceId);
     await ensureDefaultLedgers(database, clock);
 
+    // W9-10 录入漏斗断言面（§2.3「打开→输入→解析→确认」、§11.1 W9-10 北极星
+    // 实测）：RecordingTelemetryService 捕获壳层 FAB 流的漏斗/护栏指标。
+    final telemetry = RecordingTelemetryService();
+
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -102,6 +108,7 @@ void main() {
           captureGatewayProvider
               .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
           captureParserProvider.overrideWithValue(createCaptureParser()),
+          telemetryServiceProvider.overrideWithValue(telemetry),
         ],
         child: const SlimcaApp(),
       ),
@@ -125,6 +132,10 @@ void main() {
 
     // ── 经 CapturePage 录入：仅记钱表单记午饭 ¥25.50（§11.1 W2 主线）──
     await tester.tap(find.byType(FloatingActionButton));
+    // W9-10 录入漏斗首步「打开」（W7-8 缺口，核对补齐）：抽屉唤起即记。
+    await telemetry.flush();
+    expect(telemetry.byName(TelemetryFunnel.captureOpen), hasLength(1),
+        reason: '漏斗「打开」起点：唤起录入抽屉即记（§2.3）');
     await tester.pumpAndSettle();
     // 缺省「钱+热量」档渲染 AI 输入区；切「仅记钱」→ W2 手动表单（§3.3）。
     expect(find.byKey(const Key('capture_ai_input')), findsOneWidget);
@@ -150,6 +161,16 @@ void main() {
 
     await tester.tap(find.byKey(const Key('capture_submit')));
     await tester.pumpAndSettle(); // 抽屉弹簧反向退场 + 明细流重发落界面
+
+    // W9-10 录入漏斗终点 + 护栏耗时（§2.3 步 5「确认」、护栏「打开→确认
+    // ≤8s（P50）」的 metric 数据源）。
+    await telemetry.flush();
+    expect(telemetry.byName(TelemetryFunnel.captureConfirm), hasLength(1),
+        reason: '漏斗终点「确认」在提交成功路径触发（W7-8 口径保持）');
+    final guardrail = telemetry.byName(TelemetryMetricName.captureOpenToConfirmMs);
+    expect(guardrail, hasLength(1), reason: '打开→确认护栏耗时随确认落盘');
+    expect(guardrail.single.props['value'], greaterThan(0));
+    expect(guardrail.single.props['unit'], 'ms');
 
     // 抽屉已收起（§9.3#3），回不到录入面。
     expect(find.byKey(const Key('capture_submit')), findsNothing);

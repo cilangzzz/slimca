@@ -11,8 +11,18 @@
 /// 等业务内容。[TelemetryPrivacy] 是实现方必须经过的统一脱敏闸门。
 ///
 /// 漏斗事件名（[TelemetryFunnel]，§12 验收口径——W8 内测起每周周报的链路）：
-/// 冷启动完成 → 录入渠道选择 → 解析请求/成功/失败降级 → 确认 →
-/// 同步 push/pull 成败。
+/// 冷启动/启动打开 → 首次启动锚 → 录入渠道选择 → 解析请求/成功/失败降级 →
+/// 确认 → 同步 push/pull 成败。W9-10 北极星实测（§11.1）三项口径：
+/// - **次日留存**：`first_open`（D0 锚，settings 落首次启动日）+ 每次启动
+///   `app_open`（带 day_offset）——D1 存在 app_open 即留存，本地 JSONL 周报
+///   可算（真机数据待实测）；
+/// - **录入漏斗**：`capture_open`（打开）→ `capture_channel_selected`（输入）
+///   → `parse_request/success/fallback`（解析）→ `capture_confirm`（确认），
+///   护栏「文字路径打开→确认 ≤8s（P50）」经 metric
+///   [TelemetryMetricName.captureOpenToConfirmMs]；
+/// - **真机帧率**：metric [TelemetryMetricName.frameRasterMs] /
+///   [TelemetryMetricName.frameDropped]（壳层 FrameTelemetry 装配，
+///   仅真机 profile/release 有效，数字待真机实测）。
 library;
 
 /// 遥测记录类型（§3.9：崩溃 / 性能 / 漏斗三类）。
@@ -87,6 +97,19 @@ abstract final class TelemetryFunnel {
   /// 冷启动完成（首帧栅格化=可交互基线，§2.3 步 0 ≤1.2s）。
   static const String coldStartComplete = 'cold_start_complete';
 
+  /// 首次启动（W9-10 北极星·次日留存的 D0 锚点：首次启动日由壳层落
+  /// settings 本地件；此后每次启动记 [appOpen] 并带 day_offset）。
+  static const String firstOpen = 'first_open';
+
+  /// 每次启动打开（W9-10 北极星·次日留存的分子数据源：props.day_offset =
+  /// 距 first_open 的日历日偏移，0=当日、1=次日；某设备存在 day_offset=1
+  /// 的 app_open 即计入次日留存——本地 JSONL 周报可算，数字待真机实测）。
+  static const String appOpen = 'app_open';
+
+  /// 录入抽屉打开（§2.3 录入漏斗首步「打开」；W9-10 补齐的漏斗起点，
+  /// 同时是护栏「打开→确认 ≤8s（P50）」的计时起点）。
+  static const String captureOpen = 'capture_open';
+
   /// 录入渠道选择（写/说/拍，§3.3 三通道）。
   static const String captureChannelSelected = 'capture_channel_selected';
 
@@ -113,6 +136,28 @@ abstract final class TelemetryFunnel {
 
   /// 同步 pull 失败。
   static const String syncPullFail = 'sync_pull_fail';
+}
+
+/// 指标（metric）事件名常量（§3.9 性能监控、§9.4 帧预算、§2.3 护栏口径）。
+///
+/// metric 名与漏斗事件名分立：metric 落盘为 `kind=metric`，props 携带
+/// `value`/`unit`/tags（全部标量，§3.9 隐私口径）。
+abstract final class TelemetryMetricName {
+  /// 录入「打开→确认」护栏耗时（§2.3：文字路径 ≤8s（P50）、拍照 ≤15s；
+  /// W9-10 北极星·录入漏斗的护栏数据源）。
+  static const String captureOpenToConfirmMs = 'capture_open_to_confirm_ms';
+
+  /// 帧栅格耗时批次聚合（§9.4 raster ≤16ms；value=批内最大 raster ms，
+  /// tags：frames/dropped/max_build_ms/raster_over_budget/build_over_budget）。
+  /// 仅真机 profile/release 有效（debug JIT 失真不采），数字待真机实测。
+  static const String frameRasterMs = 'frame_raster_ms';
+
+  /// 丢帧计数（§9.4 满动效丢帧 <1%（G99 级）：value=批内丢帧数，tags.frames
+  /// =批内总帧数；丢帧判定=totalSpan > 1/60s，与 DevTools 帧率口径一致）。
+  static const String frameDropped = 'frame_dropped';
+
+  /// 同步一轮耗时（§6.2 全链路；壳层 SyncCoordinator 落盘）。
+  static const String syncCycleMs = 'sync_cycle_ms';
 }
 
 /// 遥测隐私闸门（§3.9「不含内容字段，仅计数/耗时/错误类型」的强制实现点）。

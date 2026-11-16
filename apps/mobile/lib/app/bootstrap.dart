@@ -18,6 +18,7 @@
 /// （§2.3 步 0 无 spinner 冷启动）。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -43,6 +44,10 @@ import 'providers.dart';
 
 /// settings 表中的设备标识键（§5.6⑲：key-value 配置，value 一律 JSON）。
 const String _kDeviceIdKey = 'device_id';
+
+/// settings 表中的首次启动日键（W9-10 北极星·次日留存的 D0 锚点；
+/// §5.6⑲ settings 本地件，永不同步、自愈口径同 device_id）。
+const String _kFirstOpenDayKey = 'first_open_day';
 
 /// 同步真值表名（§5.6⑯ outbox target_table；与 Drift 表 SQL 名一致）。
 const String _kLedgersTable = 'ledgers';
@@ -79,6 +84,18 @@ Future<AppRuntime> bootstrap() async {
   // ── W7-8 · 遥测（§3.9）：本地 JSONL 落盘；装配失败回落 Noop（缺失只损
   // 失监控数据、不影响业务，§6.1 纪律）。路径 = 应用 support 目录/telemetry。
   final telemetry = await _createTelemetryService();
+
+  // ── W9-10 · 北极星留存锚点（§12「次日留存」、§11.1 W9-10「北极星实测」）：
+  // 首次启动记 first_open（D0 锚），此后每次启动记 app_open（day_offset=
+  // 距首次启动的日历日偏移；D1 存在 app_open 即次日留存，本地 JSONL 周报
+  // 可算——数字待真机实测）。
+  final retention = await ensureFirstOpenDay(database);
+  unawaited(
+    telemetry.funnel(
+      retention.isFirstOpen ? TelemetryFunnel.firstOpen : TelemetryFunnel.appOpen,
+      props: <String, Object?>{'day_offset': retention.dayOffset},
+    ),
+  );
 
   // ── W7-8 · raw_input 上云开关（§3.7 数据主权、§3.3 默认关）：读 settings
   // 装入上次用户选择；坏值回落 false（本地件自愈，§5.6⑲）。
@@ -149,6 +166,93 @@ Future<TelemetryService> _createTelemetryService() async {
   } on Object {
     return const NoopTelemetryService();
   }
+}
+
+/// 次日留存启动锚点产出（W9-10 北极星口径，§12「次日留存」）。
+class RetentionAnchor {
+  const RetentionAnchor({
+    required this.firstOpenDay,
+    required this.isFirstOpen,
+    required this.dayOffset,
+  });
+
+  /// 首次启动日（本地日历日 yyyy-MM-dd；settings 本地件，之后恒定）。
+  final String firstOpenDay;
+
+  /// 本次启动是否为首次启动（首次=true → 漏斗记 first_open）。
+  final bool isFirstOpen;
+
+  /// 距首次启动的日历日偏移（0=当日、1=次日；次日留存分母=首次启动设备，
+  /// 分子=存在 day_offset==1 的 app_open 的设备——本地 JSONL 可算）。
+  final int dayOffset;
+}
+
+/// 确保首次启动日锚点就绪并返回（W9-10 北极星·次日留存，§11.1）。
+///
+/// 首次启动：写 settings（`first_open_day` = 本地日历日 JSON 字符串）→
+/// [RetentionAnchor](isFirstOpen=true, dayOffset=0)；此后启动复用存储值并
+/// 计算日偏移。损坏值（非法 JSON / 非法日历日）视同未存储重新锚定——本地件
+/// 自愈（§5.6⑲ 同 device_id 口径）；代价只是留存曲线从当天重新起算。
+///
+/// 日偏移按 UTC 午末日历日差计算（双端无时区/夏令时漂移）。
+Future<RetentionAnchor> ensureFirstOpenDay(
+  db.AppDatabase database, {
+  DateTime Function()? now,
+}) async {
+  final today = (now ?? DateTime.now)();
+  final todayDay = formatCalendarDay(today);
+  final row = await (database.select(database.settings)
+        ..where((s) => s.key.equals(_kFirstOpenDayKey)))
+      .getSingleOrNull();
+  if (row != null) {
+    try {
+      final stored = jsonDecode(row.value) as String;
+      if (_isRealCalendarDay(stored)) {
+        return RetentionAnchor(
+          firstOpenDay: stored,
+          isFirstOpen: false,
+          dayOffset: _calendarDayOffset(stored, todayDay),
+        );
+      }
+    } on Object {
+      // 损坏值：落入下方重新锚定（settings ⑲ 本地件自愈）。
+    }
+  }
+  await database.into(database.settings).insertOnConflictUpdate(
+        db.Setting(key: _kFirstOpenDayKey, value: jsonEncode(todayDay)),
+      );
+  return RetentionAnchor(
+    firstOpenDay: todayDay,
+    isFirstOpen: true,
+    dayOffset: 0,
+  );
+}
+
+/// 两个日历日（yyyy-MM-dd）的整数日偏移（to - from；UTC 午末日差，免时区
+/// 与夏令时漂移）。
+int _calendarDayOffset(String from, String to) {
+  final fromDate = DateTime.utc(
+    int.parse(from.substring(0, 4)),
+    int.parse(from.substring(5, 7)),
+    int.parse(from.substring(8, 10)),
+  );
+  final toDate = DateTime.utc(
+    int.parse(to.substring(0, 4)),
+    int.parse(to.substring(5, 7)),
+    int.parse(to.substring(8, 10)),
+  );
+  return toDate.difference(fromDate).inDays;
+}
+
+/// 形状（§5.1 日历日正则）与语义（真实存在日期）双重校验——`9999-99-99`
+/// 这类形状合格但语义坏值视同未存储（自愈重新锚定）。
+bool _isRealCalendarDay(String value) {
+  if (!isValidCalendarDay(value)) return false;
+  final y = int.parse(value.substring(0, 4));
+  final m = int.parse(value.substring(5, 7));
+  final d = int.parse(value.substring(8, 10));
+  final date = DateTime.utc(y, m, d);
+  return date.year == y && date.month == m && date.day == d;
 }
 
 /// 确保本地设备标识就绪并返回（§6.3：device_id = UUIDv7 前 12 个 hex 字符）。

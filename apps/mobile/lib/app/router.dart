@@ -104,24 +104,30 @@ class SlimcaShell extends ConsumerWidget {
         // 同一 captureControllerProvider，两通道同一条 AI 解析管线；归属日取
         // 仪表盘当前选中日（§3.2）。编辑路径（修正链 §3.4）仍直达
         // showCaptureSheet 的 W2 表单，不经通道切换。
-        onPressed: () => showCaptureChannelsSheet(
-          context,
-          seed: CaptureSeed(
-            initialDate: formatCalendarDay(ref.read(selectedDateProvider)),
-          ),
-          // W7-8 录入漏斗终点（§12 验收口径「确认」）：onSubmitted 在所有
-          // 获取性提交路径（手记/AI 确认/降级手填/chip 复记）触发（§2.3 步 5
-          // 打开→输入→解析→确认）。props 空（条目内容禁入遥测，§3.9）。
-          // 注：编辑路径（修正链 showCaptureSheet，§3.4）为纠错而非获取，
-          // 不计入本漏斗（§2.3 录入漏斗口径）。
-          onSubmitted: (_) {
-            unawaited(
-              ref.read(telemetryServiceProvider).funnel(
-                    TelemetryFunnel.captureConfirm,
-                  ),
-            );
-          },
-        ),
+        onPressed: () {
+          // W9-10 录入漏斗首步「打开」（§2.3「打开→输入→解析→确认」、
+          // §11.1 W9-10「北极星实测·录入漏斗」）：抽屉唤起即记（W7-8 只埋
+          // 渠道选择，漏斗缺「打开」起点，本次核对补齐）。openedAt 同时是
+          // 护栏「打开→确认 ≤8s（P50）」的计时起点——确认落库时以
+          // capture_open_to_confirm_ms 指标落盘（§2.3 护栏口径）。
+          final openedAt = DateTime.now();
+          final telemetry = ref.read(telemetryServiceProvider);
+          unawaited(telemetry.funnel(TelemetryFunnel.captureOpen));
+          showCaptureChannelsSheet(
+            context,
+            seed: CaptureSeed(
+              initialDate: formatCalendarDay(ref.read(selectedDateProvider)),
+            ),
+            // W7-8 录入漏斗终点（§12 验收口径「确认」）：onSubmitted 在所有
+            // 获取性提交路径（手记/AI 确认/降级手填/chip 复记）触发（§2.3 步 5
+            // 打开→输入→解析→确认）。props 空（条目内容禁入遥测，§3.9）。
+            // 注：编辑路径（修正链 showCaptureSheet，§3.4）为纠错而非获取，
+            // 不计入本漏斗（§2.3 录入漏斗口径）。
+            onSubmitted: (_) {
+              unawaited(_funnelCaptureConfirmed(telemetry, openedAt: openedAt));
+            },
+          );
+        },
         tooltip: '记一件事',
         child: const Icon(Icons.add),
       ),
@@ -155,4 +161,23 @@ class SlimcaShell extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// 录入漏斗终点：确认落库 + 「打开→确认」护栏耗时（§2.3 步 5 与护栏口径、
+/// §12 漏斗周报、§11.1 W9-10 北极星实测）。
+///
+/// 顺序保证：先 funnel capture_confirm（漏斗终点），再 metric
+/// capture_open_to_confirm_ms（文字路径 ≤8s（P50）、拍照 ≤15s 的数据源；
+/// 通道维度由漏斗里的 capture_channel_selected/parse_request.input_kind
+/// 承担，周报侧按事件序列 join，本指标不携带内容字段，§3.9）。
+Future<void> _funnelCaptureConfirmed(
+  TelemetryService telemetry, {
+  required DateTime openedAt,
+}) async {
+  await telemetry.funnel(TelemetryFunnel.captureConfirm);
+  await telemetry.metric(
+    TelemetryMetricName.captureOpenToConfirmMs,
+    value: DateTime.now().difference(openedAt).inMilliseconds,
+    unit: 'ms',
+  );
 }

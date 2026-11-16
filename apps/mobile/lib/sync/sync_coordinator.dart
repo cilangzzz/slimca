@@ -82,9 +82,10 @@ class SyncCoordinator {
       stopwatch.stop();
       _syncing = false;
     }
-    // 性能指标（§3.9：同步耗时为允许的标量口径）。
+    // 性能指标（§3.9：同步耗时为允许的标量口径；W9-10 收敛为
+    // core_domain 指标名常量，与 §12 漏斗周报同源）。
     await _telemetry?.metric(
-      'sync_cycle_ms',
+      TelemetryMetricName.syncCycleMs,
       value: stopwatch.elapsedMilliseconds,
       unit: 'ms',
     );
