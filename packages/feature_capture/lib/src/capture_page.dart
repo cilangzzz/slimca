@@ -1,13 +1,16 @@
-/// 手动记账录入页 CapturePage（§3.3 写通道、§11.1 W2「手动记账 CRUD 全链路」）。
+/// 录入页 CapturePage（§3.3 写通道、§11.1 W2「手动记账 CRUD 全链路」+ W3-4
+/// 「AI 双解析闭环（文本）」）。
 ///
-/// 组成（§3.3 录入抽屉）：单边开关 → 方向 in/out → 金额数字键盘 → 标题/
-/// 分类/账本/日期/备注 → 提交（spring 微动效，§9.2 springSnappy）。
+/// 组成（§3.3 录入抽屉）：单边开关 → 按档位分流：
+/// - 仅记钱：W2 手动表单（方向 → 数字键盘 → 标题/分类/账本/日期/备注 → 保存，
+///   §3.4 流水；编辑模式恒走此表单，金额不可变=新增修正行）；
+/// - 钱+热量 / 仅记热量：AI 双解析流状态机（[CaptureAiStage]）：
+///   文本输入区（+最近 chip 复记入口，§2.4）→ 解析中呼吸态 → 确认卡
+///   （AI 初值预填 + count-up + 环 sweep + 置信度三色点 + 份量滑杆，§9.3#4）
+///   → 确认落库；解析失败自动降级手填表单且原文保留（§7.4、§2.4-3）。
+///
 /// 可经 [showCaptureSheet] 以弹簧 bottomSheet 唤起（§9.3#3），也可作为
-/// 普通页面嵌入路由。
-///
-/// 提交语义（§3.4）：新建=entries(kind=expense)+entry_lines(type=money)；
-/// 编辑=新增 correction 行 supersede 旧行（金额不可变）。提交经
-/// [captureControllerProvider]（AsyncNotifier）编排。
+/// 普通页面嵌入路由。提交经 [captureControllerProvider]（AsyncNotifier）编排。
 library;
 
 import 'package:flutter/material.dart';
@@ -16,14 +19,23 @@ import 'package:ui_kit/ui_kit.dart';
 
 import 'capture_controller.dart';
 import 'capture_models.dart';
+import 'widgets/capture_ai_input.dart';
 import 'widgets/capture_amount_input.dart';
 import 'widgets/capture_category_picker.dart';
+import 'widgets/capture_confirm_card.dart';
+import 'widgets/capture_date_row.dart';
 import 'widgets/capture_direction_toggle.dart';
 import 'widgets/capture_ledger_picker.dart';
+import 'widgets/capture_parsing_state.dart';
+import 'widgets/capture_recent_chips.dart';
 import 'widgets/capture_side_toggle.dart';
+import 'widgets/capture_text_field.dart';
 
-/// 提交按钮测试锚点。
+/// 提交按钮测试锚点（W2 手动表单与 AI 降级表单共用，两分支互斥渲染）。
 const Key captureSubmitKey = ValueKey('capture_submit');
+
+/// 解析失败降级横幅测试锚点（§7.4）。
+const Key captureFallbackBannerKey = ValueKey('capture_fallback_banner');
 
 /// 唤起录入抽屉（§9.3#3 弹簧 bottomSheet，§4.3「capture 抽屉语义」）。
 Future<void> showCaptureSheet(
@@ -38,7 +50,7 @@ Future<void> showCaptureSheet(
   );
 }
 
-/// 手动记账录入页。
+/// 录入页：W2 手动记账 + W3-4 AI 双解析流。
 class CapturePage extends ConsumerWidget {
   const CapturePage({
     super.key,
@@ -62,34 +74,37 @@ class CapturePage extends ConsumerWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _CaptureHeader(isEditing: form?.isEditing ?? false),
+        _CaptureHeader(form: form),
         if (form == null)
-          // build 异步装载（账本/分类/编辑回填）：抽屉打开 ≤280ms 预算内的
-          // 过渡帧（§2.3 打开到可输入 ≤280ms）。
+          // build 异步装载（账本/分类/最近 chips/编辑回填）：抽屉打开 ≤280ms
+          // 预算内的过渡帧（§2.3 打开到可输入 ≤280ms）。
           const SizedBox(
             height: 140,
             child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
           )
         else ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-            child: CaptureSideToggle(
-              value: form.side,
-              onChanged: (side) => ref
-                  .read(captureControllerProvider(seed).notifier)
-                  .setSide(side),
+          // 编辑模式恒为 W2 money 表单，单边开关不渲染（§3.4 修正链口径）。
+          if (!form.isEditing)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+              child: CaptureSideToggle(
+                value: form.side,
+                onChanged: (side) => ref
+                    .read(captureControllerProvider(seed).notifier)
+                    .setSide(side),
+              ),
             ),
-          ),
           Flexible(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
               child: form.side == CaptureSide.money
                   ? _moneyForm(context, ref, form)
-                  // §3.3 单边开关：热量输入区 W3-4 接 AI（占位）。
-                  : _caloriePlaceholder(context),
+                  : _aiFlowBody(context, ref, form),
             ),
           ),
-          _submitFooter(context, ref, form),
+          // W2 手动表单的页脚提交位；AI 流的提交按钮内嵌在确认卡/降级表单。
+          if (form.side == CaptureSide.money)
+            _submitFooter(context, ref, form),
         ],
       ],
     );
@@ -99,6 +114,8 @@ class CapturePage extends ConsumerWidget {
       child: SafeArea(top: false, child: body),
     );
   }
+
+  // ── W2 手动 money 表单（仅记钱 / 编辑模式，§3.4）──────────────────
 
   Widget _moneyForm(BuildContext context, WidgetRef ref, CaptureFormState form) {
     final notifier = ref.read(captureControllerProvider(seed).notifier);
@@ -122,7 +139,7 @@ class CapturePage extends ConsumerWidget {
           onBackspace: notifier.backspace,
         ),
         const SizedBox(height: 14),
-        _CaptureTextField(
+        CaptureTextField(
           initial: form.title,
           hint: '标题（留空自动取分类名）',
           onChanged: notifier.setTitle,
@@ -142,9 +159,9 @@ class CapturePage extends ConsumerWidget {
           onSelected: notifier.selectLedger,
         ),
         const SizedBox(height: 14),
-        _CaptureDateRow(date: form.date, onPicked: notifier.setDate),
+        CaptureDateRow(date: form.date, onPicked: notifier.setDate),
         const SizedBox(height: 14),
-        _CaptureTextField(
+        CaptureTextField(
           initial: form.note,
           hint: '备注',
           maxLines: 2,
@@ -154,41 +171,174 @@ class CapturePage extends ConsumerWidget {
     );
   }
 
-  /// §3.3 单边开关的「仅记热量」占位区：W3-4 AI 双解析上线后替换为
-  /// 菜品/份量输入（届时 lines 只产出一类 calorie）。
-  Widget _caloriePlaceholder(BuildContext context) {
-    final tokens = context.slimca;
-    return Container(
-      key: const ValueKey('capture_calorie_placeholder'),
-      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: tokens.surfaceMuted,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.local_fire_department_outlined,
-              size: 40, color: tokens.kcalIn),
-          const SizedBox(height: 12),
-          Text(
-            '热量输入区将在 W3-4 随 AI 双解析上线',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              color: tokens.onSurface,
+  // ── W3-4 AI 双解析流（§3.3、§11.1 W3-4）──────────────────────────
+
+  /// AI 流按 [CaptureAiStage] 分流：输入区 → 解析中呼吸态 → 确认卡 /
+  /// 失败降级手填表单（§2.3 步骤 2-4、§7.4）。
+  Widget _aiFlowBody(BuildContext context, WidgetRef ref, CaptureFormState form) {
+    final notifier = ref.read(captureControllerProvider(seed).notifier);
+    switch (form.aiStage) {
+      case CaptureAiStage.input:
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 最近记录 chip 复记入口（§2.4-1「一键带入 ≤5 秒」）；空库不渲染。
+            if (form.recentEntries.isNotEmpty) ...[
+              CaptureRecentChips(
+                entries: form.recentEntries,
+                onSelected: notifier.applyRecentChip,
+              ),
+              const SizedBox(height: 14),
+            ],
+            CaptureAiInput(
+              text: form.inputText,
+              side: form.side,
+              errorText: form.errorText,
+              onChanged: notifier.setInputText,
+              onParse: notifier.startParse,
             ),
+          ],
+        );
+      case CaptureAiStage.parsing:
+        // 解析中呼吸态（§9.4「AI 等待骨架出现 ≤100ms」：切阶段为同步 setState，
+        // 网络等待发生在骨架之后）。
+        return const CaptureParsingState();
+      case CaptureAiStage.confirm:
+        return CaptureConfirmCard(
+          form: form,
+          controller: notifier,
+          onConfirm: () => _onAiSubmit(context, ref),
+        );
+      case CaptureAiStage.manualFallback:
+        return _fallbackForm(context, ref, form);
+    }
+  }
+
+  /// 失败降级手填表单（§7.4「原输入保留 → 自动降级手填表单」；§2.4-3
+  /// 「输入页永不卡死」）：标题预填原文，热量/金额按单边开关裁剪。
+  Widget _fallbackForm(
+    BuildContext context,
+    WidgetRef ref,
+    CaptureFormState form,
+  ) {
+    final tokens = context.slimca;
+    final notifier = ref.read(captureControllerProvider(seed).notifier);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 降级提示横幅（§7.4 结构化失败文案 + 原文保留说明）。
+        Container(
+          key: captureFallbackBannerKey,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: tokens.warn.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(12),
           ),
-          const SizedBox(height: 6),
-          Text(
-            '当前版本先记钱；此处为单边开关预留位（§3.3）',
-            style: TextStyle(fontSize: 13, color: tokens.onSurfaceMuted),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, size: 18, color: tokens.warn),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  form.fallbackHint ?? 'AI 解析失败，已转手动填写（§7.4）',
+                  style: TextStyle(fontSize: 12, color: tokens.onSurface),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        CaptureTextField(
+          key: const ValueKey('capture_fallback_title'),
+          initial: form.title,
+          hint: '标题（原文已保留，可改）',
+          onChanged: notifier.setTitle,
+        ),
+        if (form.showCalorieInConfirm) ...[
+          const SizedBox(height: 14),
+          _FieldLabel('热量（kcal）'),
+          CaptureTextField(
+            key: const ValueKey('capture_manual_kcal_field'),
+            initial: form.manualKcalText,
+            hint: form.manualKcalInvalid ? '须为 0-5000 的整数（§7.1）' : '如 550',
+            keyboardType: TextInputType.number,
+            onChanged: notifier.setManualKcalText,
           ),
         ],
-      ),
+        if (form.showMoneyInConfirm) ...[
+          const SizedBox(height: 14),
+          _FieldLabel('金额（元）'),
+          CaptureTextField(
+            key: const ValueKey('capture_manual_amount_field'),
+            initial: form.amountText,
+            hint: '如 18.50（最多两位小数，§5.1）',
+            keyboardType:
+                const TextInputType.numberWithOptions(decimal: true),
+            onChanged: notifier.setAmountText,
+          ),
+        ],
+        const SizedBox(height: 14),
+        _FieldLabel('分类'),
+        CaptureCategoryPicker(
+          options: form.categories,
+          selectedId: form.categoryId,
+          onSelected: notifier.selectCategory,
+        ),
+        if (form.showMoneyInConfirm) ...[
+          const SizedBox(height: 14),
+          _FieldLabel('账本'),
+          CaptureLedgerPicker(
+            options: form.ledgers,
+            selectedId: form.ledgerId,
+            onSelected: notifier.selectLedger,
+          ),
+        ],
+        const SizedBox(height: 14),
+        CaptureDateRow(date: form.date, onPicked: notifier.setDate),
+        const SizedBox(height: 14),
+        CaptureTextField(
+          initial: form.note,
+          hint: '备注',
+          maxLines: 2,
+          onChanged: notifier.setNote,
+        ),
+        if (form.errorText != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            form.errorText!,
+            key: const ValueKey('capture_error_text'),
+            style: TextStyle(fontSize: 13, color: tokens.danger),
+          ),
+        ],
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            TextButton(
+              key: const ValueKey('capture_retry_parse_button'),
+              onPressed: form.submitting ? null : notifier.backToInput,
+              child: Text(
+                '重试 AI 解析',
+                style: TextStyle(fontSize: 14, color: tokens.onSurfaceMuted),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _SpringSubmitButton(
+                label: '保存',
+                enabled: form.canSubmitFallback,
+                submitting: form.submitting,
+                onPressed: () => _onAiSubmit(context, ref),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
+
+  // ── 提交编排 ─────────────────────────────────────────────────────
 
   Widget _submitFooter(
     BuildContext context,
@@ -215,39 +365,59 @@ class CapturePage extends ConsumerWidget {
             label: form.isEditing ? '保存修正' : '保存',
             enabled: form.canSubmit,
             submitting: form.submitting,
-            onPressed: () => _onSubmit(context, ref),
+            onPressed: () => _onMoneySubmit(context, ref),
           ),
         ],
       ),
     );
   }
 
-  /// 提交编排：成功后回调宿主或自动关闭抽屉（§4.3 capture 抽屉语义）。
-  Future<void> _onSubmit(BuildContext context, WidgetRef ref) async {
+  /// W2 提交（手动 money 表单）：成功后回调宿主或自动关闭抽屉（§4.3）。
+  Future<void> _onMoneySubmit(BuildContext context, WidgetRef ref) async {
     final notifier = ref.read(captureControllerProvider(seed).notifier);
     final entryId = await notifier.submit();
-    if (entryId == null) return;
+    if (entryId == null || !context.mounted) return;
+    await _finishSubmit(context, entryId);
+  }
+
+  /// W3-4 提交（确认卡「确认落库」/ 降级表单「保存」）：经
+  /// [CaptureController.submitPendingCapture] 同事务落库（§3.3）。
+  Future<void> _onAiSubmit(BuildContext context, WidgetRef ref) async {
+    final notifier = ref.read(captureControllerProvider(seed).notifier);
+    final entryId = await notifier.submitPendingCapture();
+    if (entryId == null || !context.mounted) return;
+    await _finishSubmit(context, entryId);
+  }
+
+  /// 提交成功收尾：回调宿主；无回调时关闭抽屉（§4.3 capture 抽屉语义）。
+  /// 调用方已在 await 后做过 context.mounted 检查。
+  Future<void> _finishSubmit(BuildContext context, String entryId) async {
     final callback = onSubmitted;
     if (callback != null) {
       callback(entryId);
       return;
     }
-    if (!context.mounted) return;
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
   }
 }
 
-/// 页头：标题 + 关闭（§3.3 录入抽屉）。
+/// 页头：标题 + 副标题（按模式分流）+ 关闭（§3.3 录入抽屉）。
 class _CaptureHeader extends StatelessWidget {
-  const _CaptureHeader({required this.isEditing});
+  const _CaptureHeader({required this.form});
 
-  final bool isEditing;
+  final CaptureFormState? form;
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.slimca;
+    final isEditing = form?.isEditing ?? false;
+    final subtitle = isEditing
+        ? '金额不可变，保存将新增修正行（§3.4）'
+        : form?.side == CaptureSide.money
+            ? '手动记账（§3.4 流水）'
+            : 'AI 双解析（§3.3）：一句话 → 确认卡，低置信度必校';
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 14, 12, 10),
       child: Row(
@@ -267,7 +437,7 @@ class _CaptureHeader extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                isEditing ? '金额不可变，保存将新增修正行（§3.4）' : '手动记账（§3.4 流水）',
+                subtitle,
                 style: TextStyle(fontSize: 12, color: tokens.onSurfaceMuted),
               ),
             ],
@@ -301,143 +471,6 @@ class _FieldLabel extends StatelessWidget {
           fontSize: 13,
           fontWeight: FontWeight.w600,
           color: tokens.onSurfaceMuted,
-        ),
-      ),
-    );
-  }
-}
-
-/// 文本输入（标题/备注）：内部持有 controller，initial 外部变化时才回写，
-/// 避免逐帧重建导致光标跳动。
-class _CaptureTextField extends StatefulWidget {
-  const _CaptureTextField({
-    required this.initial,
-    required this.hint,
-    required this.onChanged,
-    this.maxLines = 1,
-  });
-
-  final String initial;
-  final String hint;
-  final ValueChanged<String> onChanged;
-  final int maxLines;
-
-  @override
-  State<_CaptureTextField> createState() => _CaptureTextFieldState();
-}
-
-class _CaptureTextFieldState extends State<_CaptureTextField> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initial);
-
-  @override
-  void didUpdateWidget(_CaptureTextField oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.initial != oldWidget.initial &&
-        widget.initial != _controller.text) {
-      _controller.value = TextEditingValue(
-        text: widget.initial,
-        selection:
-            TextSelection.collapsed(offset: widget.initial.characters.length),
-      );
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.slimca;
-    return TextField(
-      controller: _controller,
-      maxLines: widget.maxLines,
-      style: TextStyle(fontSize: 15, color: tokens.onSurface),
-      decoration: InputDecoration(
-        hintText: widget.hint,
-        hintStyle: TextStyle(fontSize: 14, color: tokens.onSurfaceMuted),
-        filled: true,
-        fillColor: tokens.surfaceCard,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: tokens.outline),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: tokens.outline),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: tokens.primary, width: 1.5),
-        ),
-      ),
-      onChanged: widget.onChanged,
-    );
-  }
-}
-
-/// 日期行（§5.1 本地日历日 yyyy-MM-dd + tz_offset_min；tz 在提交时取当前）。
-class _CaptureDateRow extends StatelessWidget {
-  const _CaptureDateRow({required this.date, required this.onPicked});
-
-  final String date;
-  final ValueChanged<DateTime> onPicked;
-
-  DateTime? _parseDay(String text) {
-    final parts = text.split('-');
-    if (parts.length != 3) return null;
-    final y = int.tryParse(parts[0]);
-    final m = int.tryParse(parts[1]);
-    final d = int.tryParse(parts[2]);
-    if (y == null || m == null || d == null) return null;
-    return DateTime(y, m, d);
-  }
-
-  Future<void> _pick(BuildContext context) async {
-    final initial = _parseDay(date) ?? DateTime.now();
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100),
-    );
-    if (picked != null) {
-      onPicked(picked);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.slimca;
-    return Material(
-      color: tokens.surfaceCard,
-      borderRadius: BorderRadius.circular(14),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        key: const ValueKey('capture_date_row'),
-        onTap: () => _pick(context),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-          child: Row(
-            children: [
-              Icon(Icons.event_outlined, size: 20, color: tokens.onSurfaceMuted),
-              const SizedBox(width: 10),
-              Text(
-                date,
-                style: TextStyle(fontSize: 15, color: tokens.onSurface),
-              ),
-              const Spacer(),
-              Text(
-                '归属日（可回记）',
-                style: TextStyle(fontSize: 12, color: tokens.onSurfaceMuted),
-              ),
-            ],
-          ),
         ),
       ),
     );

@@ -57,6 +57,10 @@ dependencies:
   # （取 UUIDv7 前 12 位 hex，复用 core_domain Hlc.nodeIdFromUuidV7）。
   uuid: ^4.6.0
 
+  # crypto——input_hash = sha256(规范化输入)（§5.6⑭ ai_parses 缓存键、
+  # §7.1 管线「规范化 + input_hash」，W3-4 AI 解析闭环）。
+  crypto: ^3.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

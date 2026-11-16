@@ -1,5 +1,32 @@
-/// A Calculator.
-class Calculator {
-  /// Returns [value] plus 1.
-  int addOne(int value) => value + 1;
-}
+/// Slimca AI 解析域（§10.4 packages/core_ai：LLM adapter + JSON Schema +
+/// 校准联查接缝；§11.1 W3-4「AI 双解析闭环（文本）」的管线与缓存底座）。
+///
+/// 内容（§7 管线）：
+/// - LLM 适配器抽象与 OpenAI 兼容实现（可配 baseUrl/apiKey/model；预设
+///   GPT-4o-mini / Qwen-VL / GLM-4V；response_format json_schema 与
+///   json_object 两档 capability；超时/重试/错误分类，§7.1/§7.5）；
+/// - AiParser 管线（规范化 → input_hash → 缓存回放 → 受约束 JSON 解码 →
+///   字段校验/§7.3 映射 → 校验失败重试 1 次 → StructuredFailure 一级降级，
+///   §7.1-§7.4）；
+/// - input_hash 缓存（§5.6⑭ ai_parses：<7 天时效、UUIDv7 id 内嵌时间判定；
+///   内存实现与 Drift 实现）；
+/// - 四级降级接口（§7.4：一级内建于 StructuredFailure，二三四级留接口）；
+/// - 确定性 Fake（FakeLlmAdapter / FakeAiParser，测试与预览用）。
+///
+/// 分层边界（§10.4）：本库产出解析草稿（ParseSuccess/StructuredFailure），
+/// entries/entry_lines 实体化、HLC 发戳与落库由宿主 feature 层经 core_db
+/// 仓库编排；食物库联查校准（§7.1 第 6 步）以 AiRefCalibrator 钩子预留。
+library;
+
+export 'src/cache/ai_parse_cache.dart';
+export 'src/cache/drift_ai_parse_cache.dart';
+export 'src/degrade/degrade_hooks.dart';
+export 'src/fake/fake_adapter.dart';
+export 'src/fake/fake_parser.dart';
+export 'src/llm/llm_adapter.dart';
+export 'src/llm/openai_adapter.dart';
+export 'src/parse/ai_parser.dart';
+export 'src/parse/parse_categories.dart';
+export 'src/parse/parse_models.dart';
+export 'src/parse/parse_schema.dart';
+export 'src/parse/parse_validator.dart';

@@ -13,6 +13,9 @@ import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../ai/ai_parser.dart';
+import '../ai/ai_parser_factory.dart';
+import '../data/ai_parse_cache.dart';
 import '../data/drift_repositories.dart';
 
 /// 应用主库单例（§10.1 数据层选型 Drift）。
@@ -48,4 +51,22 @@ final entryRepositoryProvider = Provider<EntryRepository>((ref) {
 /// 产出行（facet 行）仓库 provider（§5.2②/§5.3 entry_lines）。
 final entryLineRepositoryProvider = Provider<EntryLineRepository>((ref) {
   return DriftEntryLineRepository(ref.watch(appDatabaseProvider));
+});
+
+// ── W3-4 AI 解析装配（§11.1 W3-4 主线、§7.1 管线、§10.4 壳负责装配）──
+
+/// AI 解析器 provider——**默认 FakeParser mock**（§11.1 W3-4）。
+///
+/// 中文注记（任务要求）：真实 adapter 待 API key 配置后经
+/// `--dart-define=SLIMCA_AI_BASE` / `--dart-define=SLIMCA_AI_KEY` /
+/// `--dart-define=SLIMCA_AI_MODEL` 切换；读取逻辑已写在
+/// lib/ai/ai_parser_factory.dart（key 缺省 → mock；key 就位 →
+/// OpenAiCompatAdapter，base/model 缺省回落 §7.5 默认值），**默认 mock**。
+/// 测试一律 override 为注入的 Fake/Mock 解析器，禁止真实网络调用。
+final aiParserProvider = Provider<AiParser>((ref) => createAiParser());
+
+/// ai_parses 缓存 DAO provider（§5.6⑭：input_hash=sha256(规范化输入) 7 天
+/// 缓存键；注入 AI 录入网关，任务项 3「input_hash 缓存注入」）。
+final aiParseCacheProvider = Provider<AiParseCache>((ref) {
+  return AiParseCache(ref.watch(appDatabaseProvider));
 });

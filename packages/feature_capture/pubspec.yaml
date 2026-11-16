@@ -1,6 +1,6 @@
 name: feature_capture
 resolution: workspace
-description: "Slimca 录入域：手动记账 CapturePage、金额分存储数字键盘、修正闭环（supersede）与 Riverpod 控制器（§3.3/§3.4、§10.4）。"
+description: "Slimca 录入域：手动记账、AI 双解析确认卡（count-up/环 sweep/置信度三档/份量滑杆）、input_hash 缓存、失败降级与最近 chip 复记（§3.3/§2.4/§7、§10.4）。"
 version: 0.0.1
 publish_to: none
 homepage:
@@ -15,15 +15,20 @@ dependencies:
   # 状态管理：Riverpod 3 AsyncNotifier（§10.1，离线优先提交路径）
   flutter_riverpod: ^3.0.0
   # 单仓分包 path 依赖（§10.4）：领域实体/仓库接口/HlcClock、Drift schema、
-  # ui_kit token 与动效
+  # ui_kit token 与动效、core_ai（W3-4 解析 adapter 对端包；本包只定义
+  # CaptureParser 接口，宿主装配时桥接，§7.1）
   core_domain:
     path: ../core_domain
   core_db:
     path: ../core_db
+  core_ai:
+    path: ../core_ai
   ui_kit:
     path: ../ui_kit
   # 网关直接读写 Drift 行（事务/查询 API）；版本与 core_db 对齐
   drift: ^2.20.0
+  # §7.1/§5.6⑭：input_hash = sha256(规范化输入) 作缓存键
+  crypto: ^3.0.0
 
 dev_dependencies:
   flutter_test:

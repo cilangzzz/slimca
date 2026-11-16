@@ -17,9 +17,12 @@ export 'src/transitions/shared_axis.dart';
 export 'src/transitions/spring_sheet.dart';
 export 'src/transitions/stagger.dart';
 export 'src/transitions/count_up.dart';
+export 'src/transitions/breath.dart';
 export 'src/transitions/hero_flight.dart';
 export 'src/transitions/theme_morph.dart';
 export 'src/transitions/confidence_dot.dart';
+export 'src/transitions/money_count_up.dart';
 
 // ── 语义组件（§3.2 核心视觉）─────────────────────────────────────
 export 'src/components/calorie_ring.dart';
+export 'src/components/confirm_card.dart';

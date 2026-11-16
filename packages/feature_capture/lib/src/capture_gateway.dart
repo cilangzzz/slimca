@@ -1,20 +1,27 @@
-/// 录入网关：组合 core_db 的仓库实现 + 手动记账/修正闭环的 W2 写路径
-/// （§3.3 手动路径、§3.4 记账、§10.4 分层）。
+/// 录入网关：组合 core_db 的仓库实现 + 手动记账/修正闭环（W2）+ AI 双解析
+/// 写路径（W3-4）的 feature 层编排（§3.3、§11.1 W2/W3-4、§10.4 分层）。
 ///
 /// 分层边界（§10.4「接口在 core_domain、实现在 core_db」）：持久化语义
 /// （软删墓碑、money 行不可变守卫、supersede 事务、day_summary 投影联动）
 /// 全部由 core_db 的 `DriftEntryRepository` / `DriftEntryLineRepository`
 /// 承担；本库不重复实现仓库，只做 feature 层编排：
-/// - 写路径组装：entries(kind=expense) + entry_lines(type=money) 的实体
+/// - W2 手动写路径：entries(kind=expense) + entry_lines(type=money) 的实体
 ///   构造与同事务落库（§5.2 facet 拆行），HLC 由注入的 [dom.HlcClock]
 ///   签发（§6.3 定宽编码）；
-/// - 修正闭环编排：主干字段与金额行的变更分流 + corrections 审计行落库
+/// - W2 修正闭环编排：主干字段与金额行的变更分流 + corrections 审计行落库
 ///   （§5.6⑮ 明确「审计行由调用方落库」，仓库层无从得知字段级前后值）；
-/// - 选项装载：money 账本/按方向过滤分类/编辑回填目标（§3.3/§5.4）。
+/// - W3-4 AI 写路径（§11.1「AI 双解析闭环（文本）」）：确认卡/复记/降级
+///   提交 → entries + calorie/money 行 + food_items + ai_parses（留痕与
+///   input_hash 缓存，§5.6⑭）+ corrections 差异审计（AI 初值 vs 用户确认，
+///   §5.6⑮ source=ai_corrected）同事务落库；
+/// - 选项装载：money 账本/kcal 账本/按方向过滤分类/分类建议命中/最近记录
+///   chips（§2.4）/编辑回填目标。
 ///
 /// 宿主装配（§10.4 壳负责装配）：override [captureGatewayProvider]，其中
 /// [dom.HlcClock] 必须是应用级单例（HLC 单调性是全设备唯一全序来源）。
 library;
+
+import 'dart:convert';
 
 import 'package:core_db/core_db.dart' as cdb;
 import 'package:core_domain/core_domain.dart' as dom;
@@ -22,6 +29,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'capture_models.dart';
+import 'capture_parser.dart';
 
 /// 依赖注入点（§10.4：壳负责装配）。宿主必须 override：
 /// `captureGatewayProvider.overrideWithValue(createCaptureGateway(db, clock))`。
@@ -87,13 +95,18 @@ class CaptureGateway {
         deviceId: clock.deviceId,
       );
 
-  /// 追加一条 corrections 审计行（§5.6⑮ append-only；W2 手动路径 source=user）。
+  /// 追加一条 corrections 审计行（§5.6⑮ append-only）。
+  ///
+  /// [source]：W2 手动修正链='user'；W3-4「AI 初值 vs 用户确认差异」=
+  /// 'ai_corrected'（W3-4 主线任务口径；§5.6⑮ 的 TEXT source 列允许扩展，
+  /// 供 P2 校准闭环区分「AI 预填被确认改动」与纯人工修正）。
   Future<void> _insertCorrectionAudit({
     required String entryId,
     String? lineId,
     required String field,
     required String oldValue,
     required String newValue,
+    required String source,
   }) async {
     await db.into(db.corrections).insert(cdb.Correction(
           id: _newId(),
@@ -102,7 +115,7 @@ class CaptureGateway {
           field: field,
           oldValue: oldValue,
           newValue: newValue,
-          source: 'user',
+          source: source,
           createdAt: _nowMs,
           updatedAt: _nowMs,
           deletedAt: null,
@@ -251,6 +264,7 @@ class CaptureGateway {
             field: 'date',
             oldValue: oldEntry.date,
             newValue: request.date,
+            source: 'user',
           );
         }
         if (oldEntry.tzOffsetMin != request.tzOffsetMin) {
@@ -259,6 +273,7 @@ class CaptureGateway {
             field: 'tz_offset_min',
             oldValue: '${oldEntry.tzOffsetMin}',
             newValue: '${request.tzOffsetMin}',
+            source: 'user',
           );
         }
         if (oldEntry.title != request.title) {
@@ -267,6 +282,7 @@ class CaptureGateway {
             field: 'title',
             oldValue: oldEntry.title,
             newValue: request.title,
+            source: 'user',
           );
         }
         if ((request.note ?? '') != (oldEntry.note ?? '')) {
@@ -275,6 +291,7 @@ class CaptureGateway {
             field: 'note',
             oldValue: oldEntry.note ?? '',
             newValue: request.note ?? '',
+            source: 'user',
           );
         }
       }
@@ -307,6 +324,7 @@ class CaptureGateway {
             field: 'amount',
             oldValue: '${oldLine.amount}',
             newValue: '${request.amountMinor}',
+            source: 'user',
           );
         }
         if (oldLine.direction != request.direction) {
@@ -316,6 +334,7 @@ class CaptureGateway {
             field: 'direction',
             oldValue: oldLine.direction.wire,
             newValue: request.direction.wire,
+            source: 'user',
           );
         }
         if (oldLine.categoryId != request.categoryId) {
@@ -325,6 +344,7 @@ class CaptureGateway {
             field: 'category',
             oldValue: oldLine.categoryId ?? '',
             newValue: request.categoryId ?? '',
+            source: 'user',
           );
         }
         if (oldLine.ledgerId != request.ledgerId) {
@@ -334,11 +354,384 @@ class CaptureGateway {
             field: 'ledger',
             oldValue: oldLine.ledgerId ?? '',
             newValue: request.ledgerId,
+            source: 'user',
           );
         }
       }
       return request.entryId;
     });
+  }
+
+  // ── W3-4 AI 双解析写路径（§11.1 W3-4「AI 双解析闭环（文本）」）────
+
+  /// AI 确认卡 / 最近 chip 复记 / 失败降级手填的统一提交路径。
+  ///
+  /// 同事务落库（§5.2 facet 拆行、§6.2 写路径）：
+  /// - entries：kind 由行集合推导（双行=mixed、仅热量=food、仅金额=expense，
+  ///   §5.2①；任务口径「expense/meal 相应」中文档枚举无 meal，餐食=food）、
+  ///   status=confirmed（用户已在确认卡确认）、source 取请求值
+  ///   （text/chip/manual，§5.2①）、ai_parse_id 溯源（§5.2①）；
+  /// - entry_lines：calorie 行（amount=kcal、direction=in、归集内置 kcal
+  ///   账本，§5.2②）+ money 行（amount=分、direction 请求值、ledger 必填），
+  ///   AI 产出行带 confidence（§5.2②「AI 产出行必填」），chip/manual 行
+  ///   confidence=null（人工语义）；
+  /// - food_items：calorie 行菜品明细逐行落库（§7.3 items[] 映射）；
+  /// - corrections：[CaptureAiSubmitRequest.aiInitials] 非空时写「AI 初值 vs
+  ///   用户确认」差异审计行（§5.6⑮，source=ai_corrected，append-only）。
+  ///
+  /// 金额不可变语义自确认起生效：后续修改一律走 W2 [applyMoneyCorrection]
+  /// （新增 correction 行，§3.4）。
+  Future<String> submitAiCapture(CaptureAiSubmitRequest request) async {
+    assert(!request.hasMoney || request.ledgerId != null,
+        'money 行必填账本（§5.2② ledger_id）');
+    assert(!request.hasCalorie || (request.kcal! >= 0),
+        'kcal 非负（§5.2② amount）');
+    return db.transaction<String>(() async {
+      final kind = request.hasCalorie && request.hasMoney
+          ? dom.EntryKind.mixed
+          : request.hasCalorie
+              ? dom.EntryKind.food
+              : dom.EntryKind.expense;
+      final entry = dom.Entry(
+        id: _newId(),
+        date: request.date,
+        tzOffsetMin: request.tzOffsetMin,
+        occurredAt: _nowMs,
+        kind: kind,
+        source: request.source,
+        title: request.title,
+        note: request.note,
+        status: dom.EntryStatus.confirmed,
+        aiParseId: request.aiParseId,
+        meta: _newMeta(),
+      );
+      await entries.upsert(entry);
+
+      String? calorieLineId;
+      String? moneyLineId;
+      if (request.hasCalorie) {
+        final kcalLedger = await ensureKcalLedger();
+        // 行级明细 payload：菜品数组摘要 + 份量倍率（§5.2② payload「菜品
+        // 数组摘要」；菜品全量落 food_items 行，此处为行级快照）。
+        final payload = jsonEncode(<String, Object?>{
+          'items': [for (final item in request.items) _itemToJson(item)],
+          'portion_multiplier': request.portionMultiplier,
+        }..removeWhere((k, v) => v == null));
+        final line = dom.EntryLine(
+          id: _newId(),
+          entryId: entry.id,
+          type: dom.LineType.calorie,
+          amount: request.kcal!,
+          direction: dom.LineDirection.income, // calorie=in（§5.2②）
+          ledgerId: kcalLedger.id,
+          categoryId: request.categoryId,
+          currency: null,
+          confidence: request.kcalConfidence,
+          payload: payload,
+          correctionOf: null,
+          status: dom.LineStatus.active,
+          meta: _newMeta(),
+        );
+        await entryLines.upsert(line);
+        calorieLineId = line.id;
+        // food_items 逐菜品（§7.3「items[] → food_items 逐菜品」）。
+        for (final item in request.items) {
+          await db.into(db.foodItems).insert(cdb.FoodItem(
+                id: _newId(),
+                entryId: entry.id,
+                lineId: line.id,
+                name: item.name,
+                portionG: item.portionG,
+                kcal: item.kcal,
+                proteinG: item.proteinG,
+                carbG: item.carbG,
+                fatG: item.fatG,
+                refSource: item.refSource,
+                refId: item.refId,
+                confidence: item.confidence,
+                userAdjusted: false,
+                createdAt: _nowMs,
+                updatedAt: _nowMs,
+                deletedAt: null,
+                hlc: clock.now().format(),
+                revision: 1,
+                schemaVer: dom.kCurrentSchemaVer,
+                deviceId: clock.deviceId,
+              ));
+        }
+      }
+      if (request.hasMoney) {
+        // money 行币种：显式传入 > 所选账本 > 默认 CNY（§5.2② currency 行）。
+        var currency = request.currency;
+        currency ??= await _ledgerCurrency(request.ledgerId!);
+        final line = dom.EntryLine(
+          id: _newId(),
+          entryId: entry.id,
+          type: dom.LineType.money,
+          amount: request.amountMinor!,
+          direction: request.moneyDirection,
+          ledgerId: request.ledgerId,
+          categoryId: request.categoryId,
+          currency: currency,
+          confidence: request.moneyConfidence,
+          payload: null,
+          correctionOf: null,
+          status: dom.LineStatus.active,
+          meta: _newMeta(),
+        );
+        await entryLines.upsert(line);
+        moneyLineId = line.id;
+      }
+
+      // corrections 差异审计（§5.6⑮）：AI 初值 vs 用户确认，source=ai_corrected。
+      // 仅 AI/缓存路径携带初值快照；chip 复记与手动降级无初值、不产审计行。
+      final initials = request.aiInitials;
+      if (initials != null) {
+        if (initials.title != request.title) {
+          await _insertCorrectionAudit(
+            entryId: entry.id,
+            field: 'title',
+            oldValue: initials.title,
+            newValue: request.title,
+            source: 'ai_corrected',
+          );
+        }
+        if (request.hasCalorie &&
+            initials.kcal != null &&
+            initials.kcal != request.kcal) {
+          await _insertCorrectionAudit(
+            entryId: entry.id,
+            lineId: calorieLineId,
+            field: 'kcal',
+            oldValue: '${initials.kcal}',
+            newValue: '${request.kcal}',
+            source: 'ai_corrected',
+          );
+        }
+        if (request.hasMoney &&
+            initials.moneyMinor != null &&
+            initials.moneyMinor != request.amountMinor) {
+          await _insertCorrectionAudit(
+            entryId: entry.id,
+            lineId: moneyLineId,
+            field: 'amount',
+            oldValue: '${initials.moneyMinor}',
+            newValue: '${request.amountMinor}',
+            source: 'ai_corrected',
+          );
+        }
+        if (initials.categoryId != request.categoryId) {
+          await _insertCorrectionAudit(
+            entryId: entry.id,
+            lineId: moneyLineId ?? calorieLineId,
+            field: 'category',
+            oldValue: initials.categoryId ?? '',
+            newValue: request.categoryId ?? '',
+            source: 'ai_corrected',
+          );
+        }
+      }
+      return entry.id;
+    });
+  }
+
+  /// 确认卡菜品提交载荷 → food_items 行快照 JSON（payload 摘要用）。
+  Map<String, Object?> _itemToJson(CaptureConfirmedItem item) =>
+      <String, Object?>{
+        'name': item.name,
+        'portion_g': item.portionG,
+        'kcal': item.kcal,
+        'protein_g': item.proteinG,
+        'carb_g': item.carbG,
+        'fat_g': item.fatG,
+        'ref_source': item.refSource,
+        'ref_id': item.refId,
+        'confidence': item.confidence,
+      };
+
+  /// 落一条 ai_parses 留痕行（§5.6⑭），返回行 id（entries.ai_parse_id 溯源）。
+  ///
+  /// raw_output 存解析结果 JSON（缓存回放键，§3.3「相同输入 7 天内直接复用」）；
+  /// raw_input 上云开关默认关=即用即焚，原文不落任何表（§3.3）。
+  Future<String> saveAiParse({
+    required CaptureParseResult result,
+    required String inputHash,
+    required String inputKind,
+  }) async {
+    final id = cdb.generateUuidV7();
+    await db.into(db.aiParses).insert(cdb.AiParse(
+          id: id,
+          inputKind: inputKind,
+          inputHash: inputHash,
+          provider: result.provider,
+          model: result.model,
+          rawOutput: jsonEncode(result.toJson()),
+          latencyMs: result.latencyMs,
+          cost: result.costMicro,
+          confidence: result.confidence,
+          promptVersion: result.promptVersion,
+        ));
+    return id;
+  }
+
+  /// input_hash 缓存查找（§3.3「相同输入 7 天内直接复用解析结果」、§5.6⑭）。
+  ///
+  /// 命中条件：同 input_hash + 同 input_kind，且 ai_parses.id（UUIDv7）内嵌
+  /// 时间戳距今 <7 天（§5.6⑭「7 天时效判断可由 UUIDv7 id 内嵌时间戳得出，
+  /// 故不另设时间列」）。返回命中的行 id 与反序列化结果；坏缓存视同未命中
+  /// （§7.4 健壮性）。
+  Future<({String parseId, CaptureParseResult result})?> findCachedParse({
+    required String inputHash,
+    required String inputKind,
+    Duration maxAge = const Duration(days: 7),
+  }) async {
+    final rows = await (db.select(db.aiParses)
+          ..where((t) =>
+              t.inputHash.equals(inputHash) & t.inputKind.equals(inputKind))
+          ..orderBy([(t) => OrderingTerm.desc(t.id)])) // UUIDv7 字典序=时间序
+        .get();
+    final nowMs = _nowMs;
+    for (final row in rows) {
+      final tsMs = _uuidV7TimestampMs(row.id);
+      if (tsMs == null || nowMs - tsMs > maxAge.inMilliseconds) continue;
+      try {
+        final json = jsonDecode(row.rawOutput) as Map<String, Object?>;
+        return (
+          parseId: row.id,
+          result: CaptureParseResult.fromJson(json),
+        );
+      } on FormatException {
+        return null; // 坏缓存：视同未命中，重新解析覆盖
+      }
+    }
+    return null;
+  }
+
+  /// UUIDv7 id 内嵌时间戳（48 位 unix 毫秒，§5.6⑭ 缓存时效判据）。
+  ///
+  /// 非法/非 UUIDv7 形态返回 null（不据此判过期）。48 位毫秒在 Dart int
+  /// 表示范围内（<2^53），无精度损失。
+  static int? _uuidV7TimestampMs(String id) {
+    final hex = id.replaceAll('-', '');
+    if (hex.length < 12) return null;
+    return int.tryParse(hex.substring(0, 12), radix: 16);
+  }
+
+  /// category_hint → 内置分类 id（§7.3「命中内置分类；未命中挂『其他』并
+  /// 建议新建」）：先按名称精确匹配，未命中回退「其他支出/其他收入」。
+  Future<String?> matchCategoryByHint(String? hint,
+      {required bool expense}) async {
+    if (hint == null || hint.trim().isEmpty) return null;
+    final kind = expense ? 'expense' : 'income';
+    final rows = await (db.select(db.categories)
+          ..where((t) => t.kind.equals(kind) & t.deletedAt.isNull()))
+        .get();
+    final target = hint.trim();
+    for (final row in rows) {
+      if (row.name == target) return row.id;
+    }
+    final fallbackName = expense ? '其他支出' : '其他收入';
+    for (final row in rows) {
+      if (row.name == fallbackName) return row.id;
+    }
+    return null;
+  }
+
+  /// 内置 kcal 账本（§5.2②「kcal 行归集到内置 kcal 账本」、§5.4④「不可删除
+  /// 不可多开」）：seed 保证恰一个，此处兜底惰性创建（幂等）。
+  Future<cdb.Ledger> ensureKcalLedger() async {
+    final rows = await (db.select(db.ledgers)
+          ..where((t) => t.kind.equals('kcal') & t.deletedAt.isNull()))
+        .get();
+    if (rows.isNotEmpty) return rows.first;
+    final row = cdb.Ledger(
+      id: _newId(),
+      name: '热量账本',
+      icon: 'local_fire_department',
+      currency: 'kcal',
+      kind: 'kcal',
+      sort: 0,
+      openingBalanceMinor: 0,
+      isArchived: false,
+      createdAt: _nowMs,
+      updatedAt: _nowMs,
+      deletedAt: null,
+      hlc: clock.now().format(),
+      revision: 1,
+      schemaVer: dom.kCurrentSchemaVer,
+      deviceId: clock.deviceId,
+    );
+    await db.into(db.ledgers).insert(row);
+    return row;
+  }
+
+  /// 最近记录 chips 数据（§2.4-1「录入抽屉顶部展示最近记录，一键带入」）：
+  /// 有 active calorie/money 产出行的事件，按创建时间倒序取 [limit] 条。
+  Future<List<CaptureRecentEntry>> loadRecentEntries({int limit = kRecentChipLimit}) async {
+    final entryRows = await (db.select(db.entries)
+          ..where((t) =>
+              t.deletedAt.isNull() &
+              t.kind.isIn(const ['food', 'expense', 'mixed']) &
+              (t.status.equals(dom.EntryStatus.confirmed.wire) |
+                  t.status.equals(dom.EntryStatus.edited.wire)))
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.createdAt),
+            (t) => OrderingTerm.desc(t.hlc),
+          ])
+          ..limit(limit))
+        .get();
+    final chips = <CaptureRecentEntry>[];
+    for (final row in entryRows) {
+      final lines = await (db.select(db.entryLines)
+            ..where((t) =>
+                t.entryId.equals(row.id) &
+                t.status.equals(dom.LineStatus.active.wire) &
+                t.deletedAt.isNull()))
+          .get();
+      int? kcal;
+      int? moneyMinor;
+      String? categoryId;
+      String? ledgerId;
+      var moneyDirection = dom.LineDirection.outcome;
+      for (final line in lines) {
+        switch (dom.LineType.fromWire(line.type)) {
+          case dom.LineType.calorie:
+            kcal ??= line.amount;
+          case dom.LineType.money:
+            moneyMinor ??= line.amount;
+            categoryId ??= line.categoryId;
+            ledgerId ??= line.ledgerId;
+            moneyDirection = dom.LineDirection.fromWire(line.direction);
+          case dom.LineType.burn:
+            break; // burn 行不入复记 chip（§2.4 复记=吃/花场景）
+        }
+      }
+      if (kcal == null && moneyMinor == null) continue;
+      String? categoryName;
+      // 提升为 final 局部值再判空：categoryId 被下方 where 闭包捕获，
+      // 原变量在闭包读写下不参与类型提升（Dart 提升规则）。
+      final String? resolvedCategoryId = categoryId;
+      if (resolvedCategoryId != null) {
+        final cat = await (db.select(db.categories)
+              ..where((t) => t.id.equals(resolvedCategoryId)))
+            .getSingleOrNull();
+        categoryName = cat?.name;
+      }
+      chips.add(CaptureRecentEntry(
+        entryId: row.id,
+        title: row.title,
+        date: row.date,
+        kind: dom.EntryKind.fromWire(row.kind),
+        kcal: kcal,
+        moneyMinor: moneyMinor,
+        moneyDirection: moneyDirection,
+        categoryId: categoryId,
+        ledgerId: ledgerId,
+        categoryName: categoryName,
+      ));
+      if (chips.length >= limit) break;
+    }
+    return chips;
   }
 
   // ── 选项装载（账本/分类/编辑回填，§3.3/§5.4）────────────────────
@@ -360,6 +753,15 @@ class CaptureGateway {
               t.deletedAt.isNull())
           ..orderBy([(t) => OrderingTerm.asc(t.sort)]))
         .get();
+  }
+
+  /// money 行币种兜底解析（§5.2② currency 行）：取所选账本币种；账本行
+  /// 不存在（防御路径）回退 CNY，money 行 currency 永不为空。
+  Future<String> _ledgerCurrency(String ledgerId) async {
+    final row = await (db.select(db.ledgers)
+          ..where((t) => t.id.equals(ledgerId)))
+        .getSingleOrNull();
+    return row?.currency ?? 'CNY';
   }
 
   /// MVP「恒默认账本」（§3.4 单账本 MVP、§5.4④）：缺 money 账本时惰性创建

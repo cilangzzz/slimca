@@ -11,5 +11,10 @@ void main() {
     expect(buildTheme(brightness: Brightness.light).useMaterial3, isTrue);
     expect(SlimcaStaggerItem, isNotNull);
     expect(SlimcaSpringRectTween, isNotNull);
+    // W3-4 新组件（§2.3 步骤 3 确认卡件族）
+    expect(SlimcaBreath, isNotNull);
+    expect(SlimcaConfirmCard, isNotNull);
+    expect(SlimcaMoneyCountUp, isNotNull);
+    expect(SlimcaMoneyText.format(1850), '¥18.50');
   });
 }

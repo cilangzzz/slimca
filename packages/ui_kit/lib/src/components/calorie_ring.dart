@@ -11,6 +11,11 @@ import '../tokens/slimca_theme.dart';
 /// W1 占位实现：单环 + 摄入弧 + 消耗内弧 + 超支段红色（§3.2 预算状态色），
 /// 环推进走 springSoft（§9.2 spring.soft「环推进」、§9.3#4/#5）；份量滑杆联动重算时
 /// TweenAnimationBuilder 从当前 sweep 续播（§2.3 步骤 4）。中心内容由 [center] 自定义。
+///
+/// sweep 入场变体（§9.3#4「热量环 sweep 填充」，W3-4）：[sweepEntrance]=true
+/// （缺省，仪表盘 W2 口径不变）时首挂载从 0 扫到目标值、springSoft 整定；
+/// false 时首帧直接呈现目标值——仪表盘切日重建等「入场已有级联承担」的场景
+/// （§9.3#1）避免环二次 sweep。两种档位下目标值变化均从当前值 spring 续播。
 class SlimcaCalorieRing extends StatelessWidget {
   const SlimcaCalorieRing({
     super.key,
@@ -19,6 +24,7 @@ class SlimcaCalorieRing extends StatelessWidget {
     required this.budget,
     this.size = 160,
     this.strokeWidth = 12,
+    this.sweepEntrance = true,
     this.center,
   });
 
@@ -33,6 +39,10 @@ class SlimcaCalorieRing extends StatelessWidget {
 
   final double size;
   final double strokeWidth;
+
+  /// sweep 入场开关（§9.3#4「热量环 sweep 填充」）：true=首挂载从 0 扫到目标值；
+  /// false=首帧直达目标值（入场动效已由级联承担的场景），后续目标变化仍 spring 续播。
+  final bool sweepEntrance;
 
   /// 环心内容（净热量/「今日还能吃」数字等，由业务组装）。
   final Widget? center;
@@ -50,7 +60,12 @@ class SlimcaCalorieRing extends StatelessWidget {
         : 0.0;
     final bool off = motion.level == MotionLevel.off;
     return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0.0, end: fraction),
+      // sweep 入场（§9.3#4）：true 从 0 扫到目标；false 首帧直达目标值
+      // （begin 仅作用于首挂载，目标变化后 TweenAnimationBuilder 从当前值续播）
+      tween: Tween<double>(
+        begin: sweepEntrance ? 0.0 : fraction,
+        end: fraction,
+      ),
       duration: off ? motion.fadeOff : motion.springSoft.settleDuration,
       curve: off ? Curves.linear : motion.springSoft.curve,
       builder: (context, value, child) {
