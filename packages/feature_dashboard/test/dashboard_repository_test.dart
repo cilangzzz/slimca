@@ -191,6 +191,13 @@ void main() {
 
       // 本月累计 = 18.50 + 5.00 = 23.50 元（逐日投影求和）
       expect(await repo.watchMonthSpendMinor('2026-11').first, 2350);
+
+      // 有记录日集合（§3.3 月格色点数据源）：11-16/11-17 有记录、被墓碑
+      // 剔除的 999 与 superseded 行不产生「有记录日」。
+      expect(await repo.watchRecordedDays().first, <String>{
+        '2026-11-16',
+        '2026-11-17',
+      });
     });
   });
 

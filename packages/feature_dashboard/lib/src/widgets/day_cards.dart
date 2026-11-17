@@ -39,6 +39,7 @@ class DashboardDayBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final SlimcaSpacing spacing = context.spacing;
     final String dateKey = formatCalendarDay(date);
     return StreamBuilder<DashboardDaySummary?>(
       stream: repository.watchDay(dateKey),
@@ -53,12 +54,14 @@ class DashboardDayBody extends StatelessWidget {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                // §9.3#1：卡片墙按 staggerInterval（80ms）级联上浮。
+                // §9.3#1：卡片墙按 staggerInterval（80ms）级联上浮——复核项：
+                // 级联序号 0..n 连续、间隔取 motion.cascadeInterval（§5#12 合规保留）。
                 SlimcaStaggerItem(
                   index: 0,
                   child: _CalorieRingCard(summary: summary),
                 ),
-                const SizedBox(height: 12),
+                // 卡间距 12（§5#1 审计基线「卡间距 12（space150）保留」，§2.2 档位）。
+                SizedBox(height: spacing.cardInner),
                 SlimcaStaggerItem(
                   index: 1,
                   // 支出/净热量双卡等高并排：IntrinsicHeight 取双卡固有高度作
@@ -75,19 +78,19 @@ class DashboardDayBody extends StatelessWidget {
                             summary: summary,
                           ),
                         ),
-                        const SizedBox(width: 12),
+                        SizedBox(width: spacing.cardInner),
                         Expanded(child: _NetCalorieCard(summary: summary)),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
+                SizedBox(height: spacing.cardInner),
                 SlimcaStaggerItem(
                   index: 2,
                   child: _SavingsCard(summary: summary),
                 ),
                 if (empty) ...<Widget>[
-                  const SizedBox(height: 12),
+                  SizedBox(height: spacing.cardInner),
                   SlimcaStaggerItem(
                     index: 3,
                     child: _EmptyGuide(onStartCapture: onStartCapture),
@@ -113,6 +116,7 @@ class _CalorieRingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final SlimcaSpacing spacing = context.spacing;
     final SlimcaTheme tokens = context.slimca;
     final TextTheme textTheme = Theme.of(context).textTheme;
     final int kcalIn = summary?.kcalIn ?? 0;
@@ -147,7 +151,7 @@ class _CalorieRingCard extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 16),
+          SizedBox(width: spacing.inline), // 行内水平 16（§1.3）
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -158,7 +162,7 @@ class _CalorieRingCard extends StatelessWidget {
                     color: tokens.onSurface,
                   ),
                 ),
-                const SizedBox(height: 6),
+                SizedBox(height: spacing.space100),
                 _MetricLine(
                   label: '摄入',
                   value: '$kcalIn kcal',
@@ -201,6 +205,7 @@ class _SpendCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final SlimcaSpacing spacing = context.spacing;
     final SlimcaTheme tokens = context.slimca;
     final TextTheme textTheme = Theme.of(context).textTheme;
     final int todayMinor = summary?.spendMinor ?? 0;
@@ -217,7 +222,7 @@ class _SpendCard extends StatelessWidget {
               color: tokens.onSurfaceMuted,
             ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: spacing.space100),
           Text(
             _formatMoneyMinor(todayMinor),
             style: textTheme.headlineSmall?.copyWith(
@@ -225,7 +230,7 @@ class _SpendCard extends StatelessWidget {
               color: tokens.moneyOut,
             ),
           ),
-          const SizedBox(height: 4),
+          SizedBox(height: spacing.space50),
           // 本月累计：watch 投影表（§5.6「首帧直读本表、零业务查询」）。
           StreamBuilder<int>(
             stream: repository.watchMonthSpendMinor(
@@ -266,6 +271,7 @@ class _NetCalorieCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final SlimcaSpacing spacing = context.spacing;
     final SlimcaTheme tokens = context.slimca;
     final TextTheme textTheme = Theme.of(context).textTheme;
     final int net = summary?.netKcal ?? 0;
@@ -293,7 +299,7 @@ class _NetCalorieCard extends StatelessWidget {
               color: tokens.onSurfaceMuted,
             ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: spacing.space100),
           Text(
             '$net kcal',
             style: textTheme.headlineSmall?.copyWith(
@@ -301,12 +307,12 @@ class _NetCalorieCard extends StatelessWidget {
               color: tokens.net,
             ),
           ),
-          const SizedBox(height: 4),
+          SizedBox(height: spacing.space50),
           Text(
             '摄入 ${summary?.kcalIn ?? 0} − 消耗 ${summary?.kcalOut ?? 0}',
             style: textTheme.bodySmall?.copyWith(color: tokens.onSurfaceMuted),
           ),
-          const SizedBox(height: 4),
+          SizedBox(height: spacing.space50),
           Text(
             statusText,
             style: textTheme.bodySmall?.copyWith(color: statusColor),
@@ -328,6 +334,7 @@ class _SavingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final SlimcaSpacing spacing = context.spacing;
     final SlimcaTheme tokens = context.slimca;
     final TextTheme textTheme = Theme.of(context).textTheme;
     final Map<String, DashboardSavingsProgress>? savings = summary?.savings;
@@ -336,7 +343,7 @@ class _SavingsCard extends StatelessWidget {
         child: Row(
           children: <Widget>[
             Icon(Icons.savings_outlined, color: tokens.onSurfaceMuted),
-            const SizedBox(width: 12),
+            SizedBox(width: spacing.cardInner),
             Expanded(
               child: Text(
                 '存钱目标上线后自动接入卡片墙（P1，§3.6）',
@@ -354,7 +361,7 @@ class _SavingsCard extends StatelessWidget {
     for (int i = 0; i < goals.length; i++) {
       final DashboardSavingsProgress progress = goals[i];
       if (i > 0) {
-        rows.add(const SizedBox(height: 12));
+        rows.add(SizedBox(height: spacing.cardInner));
       }
       rows.add(
         Row(
@@ -373,7 +380,7 @@ class _SavingsCard extends StatelessWidget {
           ],
         ),
       );
-      rows.add(const SizedBox(height: 6));
+      rows.add(SizedBox(height: spacing.space100));
       rows.add(
         SizedBox(
           height: 6,
@@ -416,24 +423,25 @@ class _EmptyGuide extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final SlimcaSpacing spacing = context.spacing;
     final SlimcaTheme tokens = context.slimca;
     final TextTheme textTheme = Theme.of(context).textTheme;
     return _DashboardCard(
       child: Column(
         children: <Widget>[
           Icon(Icons.add_circle_outline, size: 32, color: tokens.primary),
-          const SizedBox(height: 8),
+          SizedBox(height: spacing.space100),
           Text(
             '今天还没有记录',
             style: textTheme.titleMedium?.copyWith(color: tokens.onSurface),
           ),
-          const SizedBox(height: 4),
+          SizedBox(height: spacing.space50),
           Text(
             '记一件事，钱和热量一起入账',
             style: textTheme.bodySmall?.copyWith(color: tokens.onSurfaceMuted),
           ),
           if (onStartCapture != null) ...<Widget>[
-            const SizedBox(height: 12),
+            SizedBox(height: spacing.cardInner),
             FilledButton.tonal(
               onPressed: onStartCapture,
               child: const Text('立即记录'),
@@ -445,8 +453,9 @@ class _EmptyGuide extends StatelessWidget {
   }
 }
 
-/// 仪表盘卡片容器（§3.2 卡片墙视觉一致性）：surfaceCard 语义 token（§8.2）；
-/// 圆角 16 为几何常量（radiusScale 滑杆随 P1 主题编辑器接线，§8.3）。
+/// 仪表盘卡片容器（§3.2 卡片墙视觉一致性；§5#1 审计基线合规：radius 取
+/// sizes.radiusCard（M3 shape large 16）、padding 取 spacing.inline（space200
+/// 16）、surfaceCard 语义 token（§8.2））。
 class _DashboardCard extends StatelessWidget {
   const _DashboardCard({required this.child});
 
@@ -454,13 +463,15 @@ class _DashboardCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final SlimcaSpacing spacing = context.spacing;
+    final SlimcaSizes sizes = context.sizes;
     final SlimcaTheme tokens = context.slimca;
     return DecoratedBox(
       decoration: BoxDecoration(
         color: tokens.surfaceCard,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(sizes.radiusCard),
       ),
-      child: Padding(padding: const EdgeInsets.all(16), child: child),
+      child: Padding(padding: EdgeInsets.all(spacing.inline), child: child),
     );
   }
 }

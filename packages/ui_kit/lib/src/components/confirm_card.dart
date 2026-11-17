@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../tokens/slimca_spacing.dart';
 import '../tokens/slimca_theme.dart';
 import '../transitions/stagger.dart';
 
@@ -20,7 +21,9 @@ class SlimcaConfirmCard extends StatelessWidget {
     required this.slots,
     this.header,
     this.footer,
-    this.padding = const EdgeInsets.all(16),
+    // W17 插曲审计（§5#1）：卡面内边距改引 SlimcaSpacing（缺省 space200=16，
+    // 卡内基线档）；传 null 取 token 档，杜绝组件层裸间距字面量（§8.2 第 3 层）。
+    this.padding,
     this.cascade = true,
     this.floatDistance = 16.0,
   });
@@ -35,8 +38,8 @@ class SlimcaConfirmCard extends StatelessWidget {
   /// 卡尾（确认/取消按钮区，§2.3 步骤 5）；静态在场，不参与级联。
   final Widget? footer;
 
-  /// 卡面内边距。
-  final EdgeInsetsGeometry padding;
+  /// 卡面内边距；缺省取 SlimcaSpacing.space200（16，§1.3 卡内基线）。
+  final EdgeInsetsGeometry? padding;
 
   /// 是否级联入场（false → 插槽直接在场，供预览/降级场景，§9.6）。
   final bool cascade;
@@ -47,6 +50,9 @@ class SlimcaConfirmCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final SlimcaTheme tokens = context.slimca;
+    // §5#1：缺省 padding 落 SlimcaSpacing.space200（16）
+    final EdgeInsetsGeometry effectivePadding =
+        padding ?? EdgeInsets.all(context.spacing.space200);
     return Container(
       // 语义 token 卡面（§8.2 surfaceCard）；圆角 16 为几何常量
       // （radiusScale 滑杆随 P1 主题编辑器接线，§8.3，与仪表盘卡片同口径）
@@ -55,7 +61,7 @@ class SlimcaConfirmCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.fromBorderSide(BorderSide(color: tokens.outline)),
       ),
-      padding: padding,
+      padding: effectivePadding,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

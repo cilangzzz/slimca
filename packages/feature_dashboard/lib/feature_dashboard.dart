@@ -21,6 +21,6 @@ export 'src/dashboard_repository.dart';
 // ── 日历工具（§5.1 本地日历日口径）──────────────────────────────
 export 'src/calendar.dart';
 
-// ── 页面（§3.2）─────────────────────────────────────────────────
+// ── 页面（§3.2；日历组件族=SlimcaCalendar 等 ui_kit 语义组件，§3 定稿）──
 export 'src/widgets/dashboard_page.dart';
 export 'src/widgets/day_cards.dart';

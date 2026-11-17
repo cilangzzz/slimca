@@ -5,10 +5,22 @@
 /// core_domain 的 `formatCalendarDay`/`validateCalendarDay` 往返一致（§5.1）。
 library;
 
+import 'package:core_domain/core_domain.dart' show validateCalendarDay;
+
 /// 仪表盘日历助手：归一化/周历条/月份前缀/展示文案。
 abstract final class DashboardCalendar {
   /// 归一化：丢弃时分秒，保留本地年月日（§5.1）。
   static DateTime normalize(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  /// `yyyy-MM-dd` TEXT → 本地日历日（core_domain formatCalendarDay 的逆运算，
+  /// §5.1 日期口径往返一致）。
+  static DateTime parse(String date) {
+    validateCalendarDay(date);
+    final int y = int.parse(date.substring(0, 4));
+    final int m = int.parse(date.substring(5, 7));
+    final int d = int.parse(date.substring(8, 10));
+    return DateTime(y, m, d);
+  }
 
   /// 今天的本地日历日。
   static DateTime today() => normalize(DateTime.now());
@@ -39,6 +51,21 @@ abstract final class DashboardCalendar {
 
   /// 日期大字文案（§3.2「日期大字」）：`11月16日`。
   static String dayTitle(DateTime d) => '${d.month}月${d.day}日';
+
+  /// 月份标题文案（UI-规范与重设计.md §3.2 月网格头部行 `2026年11月`）。
+  static String monthTitle(DateTime d) => '${d.year}年${d.month}月';
+
+  /// [d] 所在月首日（本地日历月，周一为一周起点不影响月内偏移）。
+  static DateTime startOfMonth(DateTime d) => DateTime(d.year, d.month, 1);
+
+  /// [d] 所在月天数（公历，本地运算）。
+  static int daysInMonth(DateTime d) => DateTime(d.year, d.month + 1, 0).day;
+
+  /// [d] 所在月网格的行数（周一起始，最多 6 行，§3.3「月网格最多 6 行」）。
+  static int monthGridRows(DateTime d) {
+    final int leading = DateTime(d.year, d.month, 1).weekday - 1;
+    return ((leading + daysInMonth(d)) / 7).ceil();
+  }
 
   /// 周几长标签（日期大字旁注，下标 = weekday-1，周一为 0）。
   static const List<String> weekdayLong = <String>[

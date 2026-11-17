@@ -81,20 +81,33 @@ final GoRouter slimcaRouter = GoRouter(
               path: '/plan',
               builder: (context, state) => const PlanPage(),
               routes: [
+                // 页面转场按《UI-规范与重设计》§4.4/§4.3 修正：行点击→二级页
+                // = 共享轴（dur.l 280ms + curveStandard，off 档 100ms 淡入淡出）
+                // ——§9.5「路由级转场一律显式 PageRouteBuilder」，与
+                // /ledger/budgets、/stats 同款 SlimcaSharedAxisPage 注入。
                 GoRoute(
                   path: 'fitness',
-                  builder: (context, state) => const FitnessLogPage(),
+                  pageBuilder: (context, state) => SlimcaSharedAxisPage(
+                    name: state.matchedLocation,
+                    builder: (_) => const FitnessLogPage(),
+                  ),
                 ),
                 GoRoute(
                   path: 'workout',
-                  builder: (context, state) => const WorkoutRunnerPage(),
+                  pageBuilder: (context, state) => SlimcaSharedAxisPage(
+                    name: state.matchedLocation,
+                    builder: (_) => const WorkoutRunnerPage(),
+                  ),
                 ),
                 // W14 健身计划模板管理（§11.2 W14 任务 1、§10.4 装配接入）：
                 // feature_plan FitnessPlanPage——模板建档/编辑/删除+周排期
                 // 日历+训练历史入口（壳内不重复建档 UI，计划卡「模板」进入）。
                 GoRoute(
                   path: 'plans',
-                  builder: (context, state) => const FitnessPlanPage(),
+                  pageBuilder: (context, state) => SlimcaSharedAxisPage(
+                    name: state.matchedLocation,
+                    builder: (_) => const FitnessPlanPage(),
+                  ),
                 ),
               ],
             ),

@@ -145,7 +145,7 @@ void main() {
       final switchFinder = find.byKey(settingsPhotoBurnSwitchKey);
       expect(switchFinder, findsOneWidget);
       expect(
-        tester.widget<SwitchListTile>(switchFinder).value,
+        tester.widget<Switch>(switchFinder).value,
         isTrue,
         reason: '默认开=解析后即焚（§3.3/§11.2 任务 3）',
       );
@@ -153,7 +153,7 @@ void main() {
       // ── 关 → 运行期持有翻转 + settings 表落库（§5.6⑲ value 一律 JSON）──
       await tester.tap(switchFinder);
       await tester.pumpAndSettle();
-      expect(tester.widget<SwitchListTile>(switchFinder).value, isFalse);
+      expect(tester.widget<Switch>(switchFinder).value, isFalse);
       final row = await database
           .customSelect(
             "SELECT value FROM settings WHERE key = 'photo_burn_after_parse'",
@@ -164,7 +164,7 @@ void main() {
       // ── 回开默认档（数据主权：随时可撤回，§3.7）──────────────────────
       await tester.tap(switchFinder);
       await tester.pumpAndSettle();
-      expect(tester.widget<SwitchListTile>(switchFinder).value, isTrue);
+      expect(tester.widget<Switch>(switchFinder).value, isTrue);
       final row2 = await database
           .customSelect(
             "SELECT value FROM settings WHERE key = 'photo_burn_after_parse'",

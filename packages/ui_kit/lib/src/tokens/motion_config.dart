@@ -166,6 +166,10 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
     required this.curveEaseOutExpo,
     required this.curveStandard,
     required this.curveEmphasized,
+    // W17 插曲（UI-规范 §2.2 新增 token 表）：展开/收起曲线对 + effects 曲线
+    required this.curveExpand,
+    required this.curveCollapse,
+    required this.curveEffectsStandard,
   });
 
   /// 动效档位（§9.2 MotionLevel）：off/reduced/full。
@@ -213,6 +217,22 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
   /// 容器变换曲线（§9.3#6 P1）。
   final Curve curveEmphasized;
 
+  /// W17 插曲新增（UI-规范 §2.2/§1.2）：展开/进场段曲线 = M3 emphasized-decelerate
+  /// `Cubic(0.05, 0.7, 0.1, 1.0)`（MotionTokens.kt 源码值）。语义：进场 ease-out、
+  /// 出场 ease-in 的不对称规则（TDesign motion）的 M3 官方实现；首批使用方＝
+  /// 周条→月网格展开、条目级联进场收尾（§5#13）。
+  final Curve curveExpand;
+
+  /// W17 插曲新增（UI-规范 §2.2/§1.2）：收起/出场段曲线 = M3 emphasized-accelerate
+  /// `Cubic(0.3, 0.0, 0.8, 0.15)`（MotionTokens.kt 源码值）。
+  final Curve curveCollapse;
+
+  /// W17 插曲新增（UI-规范 §2.2/§1.2）：颜色/透明度类动画专用曲线 = M3 Expressive
+  /// default effects `Cubic(0.34, 0.80, 0.34, 1.00)`（m3 motion/overview/specs
+  /// 原表；200ms 档配对）。这是「effects 禁过冲 / spatial 可过冲」官方判定线的
+  /// 实现载体：选中态变色、展开交叉淡化等透明度动画一律引用本曲线。
+  final Curve curveEffectsStandard;
+
   /// 从宿主 [ThemeData] 取 MotionConfig；未挂载时回退 full 档（§9.2）。
   ///
   /// W1 约定签名（apps/mobile/lib/app/theme.dart 依赖）：宿主层读取
@@ -259,6 +279,12 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
     curveStandard: Curves.easeInOutCubic,
     // 容器变换曲线（§9.3#6 P1）
     curveEmphasized: Curves.easeInOutCubicEmphasized,
+    // W17 插曲（UI-规范 §2.2）：展开/进场 = emphasized-decelerate、
+    // 收起/出场 = emphasized-accelerate（MotionTokens.kt 源码值，const 构造）
+    curveExpand: Cubic(0.05, 0.7, 0.1, 1.0),
+    curveCollapse: Cubic(0.3, 0.0, 0.8, 0.15),
+    // W17 插曲（UI-规范 §2.2）：颜色/透明度专用 effects 曲线（禁过冲判定线）
+    curveEffectsStandard: Cubic(0.34, 0.80, 0.34, 1.00),
   );
 
   /// 减弱档（§8.3）：全部时长 ×0.6。
@@ -284,6 +310,11 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
     curveEaseOutExpo: Curves.easeOutExpo,
     curveStandard: Curves.easeInOutCubic,
     curveEmphasized: Curves.easeInOutCubicEmphasized,
+    // 曲线不随 0.6x 缩放（缩放的是时长；UI-规范 §2.2「新增曲线对在 reduced 下
+    // 随 0.6x 时长照常缩放」即时长缩放、曲线本体不变）
+    curveExpand: Cubic(0.05, 0.7, 0.1, 1.0),
+    curveCollapse: Cubic(0.3, 0.0, 0.8, 0.15),
+    curveEffectsStandard: Cubic(0.34, 0.80, 0.34, 1.00),
   );
 
   /// 降级档（§9.2 MotionLevel=off / §9.6）：全部转场 100ms 淡入淡出。
@@ -309,6 +340,11 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
     curveEaseOutExpo: Curves.linear,
     curveStandard: Curves.linear,
     curveEmphasized: Curves.linear,
+    // 新增曲线对在 off 档照既有惯例线性化为 Curves.linear（UI-规范 §2.2，
+    // 不改 offFadeDuration=100ms 语义）
+    curveExpand: Curves.linear,
+    curveCollapse: Curves.linear,
+    curveEffectsStandard: Curves.linear,
   );
 
   /// 动效强度滑杆量程（§8.3：0.6x-1.5x，并尊重系统「减弱动态效果」）。
@@ -351,6 +387,10 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
       curveEaseOutExpo: curveEaseOutExpo,
       curveStandard: curveStandard,
       curveEmphasized: curveEmphasized,
+      // 曲线随 token 整体保留，不参与缩放（缩放仅作用于时长/弹簧）
+      curveExpand: curveExpand,
+      curveCollapse: curveCollapse,
+      curveEffectsStandard: curveEffectsStandard,
     );
   }
 
@@ -393,6 +433,9 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
     Curve? curveEaseOutExpo,
     Curve? curveStandard,
     Curve? curveEmphasized,
+    Curve? curveExpand,
+    Curve? curveCollapse,
+    Curve? curveEffectsStandard,
   }) => MotionConfig(
     level: level ?? this.level,
     durXs: durXs ?? this.durXs,
@@ -409,6 +452,9 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
     curveEaseOutExpo: curveEaseOutExpo ?? this.curveEaseOutExpo,
     curveStandard: curveStandard ?? this.curveStandard,
     curveEmphasized: curveEmphasized ?? this.curveEmphasized,
+    curveExpand: curveExpand ?? this.curveExpand,
+    curveCollapse: curveCollapse ?? this.curveCollapse,
+    curveEffectsStandard: curveEffectsStandard ?? this.curveEffectsStandard,
   );
 
   @override
@@ -435,6 +481,11 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
       curveEaseOutExpo: t <= 0.5 ? curveEaseOutExpo : o.curveEaseOutExpo,
       curveStandard: t <= 0.5 ? curveStandard : o.curveStandard,
       curveEmphasized: t <= 0.5 ? curveEmphasized : o.curveEmphasized,
+      curveExpand: t <= 0.5 ? curveExpand : o.curveExpand,
+      curveCollapse: t <= 0.5 ? curveCollapse : o.curveCollapse,
+      curveEffectsStandard: t <= 0.5
+          ? curveEffectsStandard
+          : o.curveEffectsStandard,
     );
   }
 
@@ -456,7 +507,10 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
         other.springSoft == springSoft &&
         other.curveEaseOutExpo == curveEaseOutExpo &&
         other.curveStandard == curveStandard &&
-        other.curveEmphasized == curveEmphasized;
+        other.curveEmphasized == curveEmphasized &&
+        other.curveExpand == curveExpand &&
+        other.curveCollapse == curveCollapse &&
+        other.curveEffectsStandard == curveEffectsStandard;
   }
 
   @override
@@ -476,6 +530,9 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
     curveEaseOutExpo,
     curveStandard,
     curveEmphasized,
+    curveExpand,
+    curveCollapse,
+    curveEffectsStandard,
   );
 
   @override

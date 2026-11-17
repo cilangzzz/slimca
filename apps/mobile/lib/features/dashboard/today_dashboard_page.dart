@@ -96,8 +96,14 @@ class _TodayDashboardPageState extends ConsumerState<TodayDashboardPage> {
 
 /// 日期大字（§3.2「日期大字」、§9.3 转场 #1 冷启动 spring 展开）。
 ///
-/// TweenAnimationBuilder 以 easeOutBack 近似 spring 展开一次（≤400ms 预算，
-/// §9.3），仅首帧播放、切日不重播——切日过渡由卡片墙 AnimatedSwitcher 承担。
+/// TweenAnimationBuilder 以弹簧展开一次（≤400ms 预算，§9.3），仅首帧播放、
+/// 切日不重播——切日过渡由卡片墙 AnimatedSwitcher 承担。
+///
+/// §5 审计 #3 修正：原实现裸值 `Duration(milliseconds: 400)` + `easeOutBack`
+/// 违反 §9.2「所有动效只引用 token 不写裸值」lint 纪律——改读
+/// `MotionConfig.of(context)`，时长/曲线一体挂 springSoft token（§9.2
+/// spring.soft 400ms ζ0.85 容器变形档；SpringCurve 为解析弹簧响应，
+/// 欠阻尼轻微过冲=spatial 类允许过冲，§1.2 判定线）。
 class _DateHeader extends StatelessWidget {
   const _DateHeader({required this.date});
 
@@ -106,14 +112,15 @@ class _DateHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final motion = MotionConfig.of(context);
     const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 400), // §9.3 转场 #1 上限
-      curve: Curves.easeOutBack,
+      duration: motion.springSoft.settleDuration, // §9.2 spring.soft
+      curve: motion.springSoft.curve,
       builder: (context, t, child) => Opacity(
-        // easeOutBack 会过冲 >1：透明度必须钳到 [0,1]（Flutter 调试断言）。
+        // 欠阻尼弹簧过冲 >1：透明度必须钳到 [0,1]（Flutter 调试断言）。
         opacity: clampDouble(t, 0.0, 1.0),
         child: Transform.scale(scale: 0.92 + 0.08 * t, child: child),
       ),
@@ -161,53 +168,57 @@ class _WeekStrip extends ConsumerWidget {
             final day = days[i];
             final isSelected = day == selected;
             final isToday = day == now;
-            return Padding(
-              padding: EdgeInsets.symmetric(horizontal: i == 6 ? 0 : 3),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: () => ref.read(selectedDateProvider.notifier).select(day),
-                child: AnimatedContainer(
-                  duration: MotionConfig.of(context).durM, // §9.2 dur.m
-                  curve: Curves.easeOutCubic,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? cs.primaryContainer
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        weekdayLabels[i],
-                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: cs.onSurfaceVariant,
-                            ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${day.day}',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: isSelected ? cs.onPrimaryContainer : null,
-                            ),
-                      ),
-                      const SizedBox(height: 4),
-                      // 今日指示点：帮助用户在周历上锚定「今天」。
-                      SizedBox(
-                        width: 4,
-                        height: 4,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: isToday
-                                ? cs.primary
-                                : Colors.transparent,
-                            shape: BoxShape.circle,
+            // §5 审计 #2 修正：原格间水平 padding 3px 违反「格间距 ≥8dp」，
+            // 改为 M3 date-picker 解剖（§1.5/§3.3）——InkWell 命中占满整格
+            // （命中≈整格宽×格高≥48dp），视觉容器左右内缩 2dp → 相邻格
+            // 视觉 gap 4（「视觉 gap 4 + 命中留白」，§5 #2 修正动作）；
+            // 选中态=颜色变化属 effects 类（禁过冲），AnimatedContainer
+            // durM+easeOutCubic 合规保留。
+            return InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => ref.read(selectedDateProvider.notifier).select(day),
+              child: AnimatedContainer(
+                duration: MotionConfig.of(context).durM, // §9.2 dur.m
+                curve: Curves.easeOutCubic,
+                margin: EdgeInsets.symmetric(horizontal: i == 6 ? 0 : 2),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? cs.primaryContainer
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      weekdayLabels[i],
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: cs.onSurfaceVariant,
                           ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${day.day}',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: isSelected ? cs.onPrimaryContainer : null,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    // 今日指示点：帮助用户在周历上锚定「今天」。
+                    SizedBox(
+                      width: 4,
+                      height: 4,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: isToday
+                              ? cs.primary
+                              : Colors.transparent,
+                          shape: BoxShape.circle,
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             );
@@ -598,10 +609,18 @@ class _SpendCard extends ConsumerWidget {
               key: const Key('dashboard_budget_hint'),
               borderRadius: BorderRadius.circular(8),
               onTap: () => GoRouter.of(context).push('/ledger/budgets'),
-              child: Text(
-                '预算余 —（点此去「预算设置」）',
-                style: textTheme.bodySmall?.copyWith(
-                  color: tokens.onSurfaceMuted,
+              // §5 审计 #5 修正：文本行命中 ≥48×48（kMinInteractiveDimension
+              // =48dp 官方常量，§1.4 触碰目标）。
+              child: Container(
+                constraints: const BoxConstraints(
+                  minHeight: kMinInteractiveDimension,
+                ),
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '预算余 —（点此去「预算设置」）',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: tokens.onSurfaceMuted,
+                  ),
                 ),
               ),
             )
@@ -625,8 +644,13 @@ class _SpendCard extends ConsumerWidget {
                 key: Key('dashboard_budget_category_${budget.categoryId}'),
                 borderRadius: BorderRadius.circular(8),
                 onTap: () => openCategoryFilter(budget.categoryId),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
+                // §5 审计 #5 修正：原 vertical padding 2 → 命中 <48dp；
+                // 包 48dp 最小命中容器（minTouchTarget 落法，§1.4）。
+                child: Container(
+                  constraints: const BoxConstraints(
+                    minHeight: kMinInteractiveDimension,
+                  ),
+                  alignment: Alignment.centerLeft,
                   child: Text(
                     '${names[budget.categoryId] ?? "分类"} '
                     '${budget.remaining >= 0
@@ -645,22 +669,29 @@ class _SpendCard extends ConsumerWidget {
               key: const Key('dashboard_spend_category_entry'),
               borderRadius: BorderRadius.circular(8),
               onTap: () => openCategoryFilter(null),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '分类明细',
-                    style: textTheme.bodySmall?.copyWith(
-                      color: tokens.primary,
-                      fontWeight: FontWeight.w600,
+              // §5 审计 #5 修正：命中 ≥48×48（同上 minTouchTarget 落法）。
+              child: Container(
+                constraints: const BoxConstraints(
+                  minHeight: kMinInteractiveDimension,
+                ),
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '分类明细',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: tokens.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  Icon(
-                    Icons.chevron_right,
-                    size: 16,
-                    color: tokens.primary,
-                  ),
-                ],
+                    Icon(
+                      Icons.chevron_right,
+                      size: 16,
+                      color: tokens.primary,
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -875,16 +906,79 @@ class _SavingsCard extends ConsumerWidget {
 /// 今日记录卡（§11 W2 手动记账全链路的流水反馈面）。
 ///
 /// - 点条目 → 录入抽屉编辑态（预填+修正链落库，§6.5 金额不可变）；
-/// - 删除 → 软删墓碑（§5.1/§6.5），聚合流即时重发（明细流直驱）；
+/// - 删除 → **snackbar undo（§4.3「可撤销动作不用 alert、常规单条删除
+///   走 snackbar undo」）**——删除请求先做乐观移除（页面态），SnackBar
+///   「撤销」可撤回；未撤销在 SnackBar 关闭时才提交软删墓碑。为什么是
+///   「延迟提交」而非「复活墓碑」：§6.5 明确墓碑拒绝复活（删后编辑保持
+///   删除胜出），undo 只在墓碑落库前撤回请求，同步语义零特例；
 /// - 完整流水列表/分类/预算入口在 /ledger（§4.3，W2+ 逐条接入）。
-class _TodayEntriesCard extends ConsumerWidget {
+class _TodayEntriesCard extends ConsumerStatefulWidget {
   const _TodayEntriesCard({required this.day});
 
   final DashboardDay day;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (day.entries.isEmpty) {
+  ConsumerState<_TodayEntriesCard> createState() => _TodayEntriesCardState();
+}
+
+class _TodayEntriesCardState extends ConsumerState<_TodayEntriesCard> {
+  /// 待提交软删的事件 id 集（乐观移除中；undo 撤回/提交软删后移除）。
+  final Map<String, _PendingDelete> _pendingDeletes = <String, _PendingDelete>{};
+
+  /// 发起删除请求（§4.3 undo）：乐观移除 + SnackBar 撤销入口；SnackBar
+  /// 关闭时按关闭原因收尾——「action」=用户已撤销，不提交；其余（超时/
+  /// 滑走/被新 SnackBar 顶替）=按「未撤销=执行」提交软删（仓库捕获于请求
+  /// 时刻，页面态销毁亦照常提交）。
+  void _requestDelete(DashboardEntryView view) {
+    final repo = ref.read(entryRepositoryProvider);
+    final clock = ref.read(hlcClockProvider);
+    setState(() {
+      _pendingDeletes[view.entryId] = _PendingDelete(repo: repo, clock: clock);
+    });
+    final controller = ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('已删除「${view.title}」'),
+        action: SnackBarAction(
+          label: '撤销',
+          onPressed: () {
+            if (!mounted) return;
+            setState(() => _pendingDeletes.remove(view.entryId));
+          },
+        ),
+      ),
+    );
+    controller.closed.then((SnackBarClosedReason reason) {
+      // 撤销路径：SnackBar 因 action 关闭，删除请求已撤回，不提交墓碑。
+      if (reason == SnackBarClosedReason.action) return;
+      final _PendingDelete? pending = _pendingDeletes.remove(view.entryId);
+      if (pending == null) return;
+      // §5.1 删除行/§6.5：软删墓碑；聚合流即时重发（乐观移除已先行）。
+      unawaited(
+        pending.repo.softDelete(view.entryId, hlc: pending.clock.now().format()),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    // 页面态销毁（切日重建卡片墙/关页）时仍有未决删除：按「未撤销=执行」
+    // 收尾，避免删除意图丢失（§4.3 undo 语义；仓库/时钟已在请求时刻捕获）。
+    for (final MapEntry<String, _PendingDelete> entry
+        in _pendingDeletes.entries) {
+      unawaited(entry.value.repo
+          .softDelete(entry.key, hlc: entry.value.clock.now().format()));
+    }
+    _pendingDeletes.clear();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 乐观移除：待提交软删的条目暂不入列表（undo 后随 setState 回归）。
+    final entries = widget.day.entries
+        .where((view) => !_pendingDeletes.containsKey(view.entryId))
+        .toList(growable: false);
+    if (entries.isEmpty && _pendingDeletes.isEmpty) {
       return const SizedBox.shrink(); // 空日不渲染（§2.3 零等待空屏）
     }
     final textTheme = Theme.of(context).textTheme;
@@ -894,25 +988,40 @@ class _TodayEntriesCard extends ConsumerWidget {
         children: [
           Text('今日记录', style: textTheme.titleMedium),
           const SizedBox(height: 4),
-          for (final view in day.entries) _EntryTile(view: view),
+          for (final view in entries)
+            _EntryTile(view: view, onRequestDelete: _requestDelete),
         ],
       ),
     );
   }
 }
 
+/// 待提交软删的捕获（仓库/时钟于请求时刻定格，SnackBar 收尾或页面态销毁
+/// 时提交——不依赖 context/widget 存活）。
+class _PendingDelete {
+  const _PendingDelete({required this.repo, required this.clock});
+
+  final EntryRepository repo;
+  final HlcClock clock;
+}
+
 /// 单条记录行：kind 图标 + 标题 + 金额/热量摘要 + 编辑/删除。
-class _EntryTile extends ConsumerWidget {
-  const _EntryTile({required this.view});
+///
+/// §5 审计 #4 修正：dense → 标准 56/72 行高（M3 ListTile 源码口径，§1.5/
+/// §4.2 行规格）；删除走 snackbar undo（§4.3，见 [_TodayEntriesCard]）。
+class _EntryTile extends StatelessWidget {
+  const _EntryTile({required this.view, required this.onRequestDelete});
 
   final DashboardEntryView view;
 
+  /// 删除请求回调（由卡片持有 undo 状态并延迟提交软删，§4.3）。
+  final void Function(DashboardEntryView view) onRequestDelete;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     return ListTile(
       contentPadding: EdgeInsets.zero,
-      dense: true,
       leading: Icon(
         _kindIcon(view.kind),
         color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -937,14 +1046,9 @@ class _EntryTile extends ConsumerWidget {
       ),
       trailing: IconButton(
         icon: const Icon(Icons.delete_outline),
-        tooltip: '删除（软删墓碑）',
-        // §5.1 删除行/§6.5：软删墓碑拒绝复活；聚合流即时重发。
-        onPressed: () {
-          final clock = ref.read(hlcClockProvider);
-          ref
-              .read(entryRepositoryProvider)
-              .softDelete(view.entryId, hlc: clock.now().format());
-        },
+        tooltip: '删除记录',
+        // §4.3：删除发 undo 请求（乐观移除+SnackBar 撤销），未撤销才落墓碑。
+        onPressed: () => onRequestDelete(view),
       ),
     );
   }

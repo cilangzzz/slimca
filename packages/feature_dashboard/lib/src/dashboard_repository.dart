@@ -34,6 +34,17 @@ abstract interface class DashboardRepository {
   /// [month] 必须为 `yyyy-MM` 月前缀（§5.1 日期口径）。
   Stream<int> watchMonthSpendMinor(String month);
 
+  /// watch 全投影表「有记录日」集合（UI-规范与重设计.md §3.3 月格色点数据源）：
+  /// 返回有任一钱/热量记录的本地日历日 `yyyy-MM-dd` 集合（§5.6⑬ day_summary
+  /// 逐日行直读——行存在且四项标量非零即「有记录」，与
+  /// [DashboardDaySummary.hasAnyRecord] 同口径）。
+  ///
+  /// 全表 watch：投影表一天一行、规模有界（本地单用户），代价可忽略；月网格
+  /// 翻月箭头在任意月切换均有色点数据（组合容器焦点月为内部状态，宿主无法
+  /// 逐月订阅）。月格 Compact 色点（每格 ≤3 色点，V1 一点=有记录；点数/
+  /// 分类色映射随 W17 记录条数投影扩展，§3.2 密度三档）。
+  Stream<Set<String>> watchRecordedDays();
+
   /// 重建某日投影（§5.6 重建规则 v1：entry_lines ⋈ entries 明细聚合 →
   /// upsert 投影行、清 dirty）。写路径（feature_capture/feature_ledger 落库）
   /// 后调用，即可实现「手动记一笔→仪表盘环/支出卡即时更新」（§11.1 W2 验收）；
@@ -70,6 +81,24 @@ class DriftDashboardRepository implements DashboardRepository {
         0,
         (int sum, db.DaySummary row) => sum + row.spendMinor,
       ),
+    );
+  }
+
+  @override
+  Stream<Set<String>> watchRecordedDays() {
+    // 全表 watch + 「有记录」过滤（与 hasAnyRecord 同口径，§3.2）。
+    final query = _db.select(_db.daySummaries).watch();
+    return query.map(
+      (List<db.DaySummary> rows) => rows
+          .where(
+            (db.DaySummary r) =>
+                r.kcalIn != 0 ||
+                r.kcalOut != 0 ||
+                r.spendMinor != 0 ||
+                r.incomeMinor != 0,
+          )
+          .map((db.DaySummary r) => r.date)
+          .toSet(),
     );
   }
 

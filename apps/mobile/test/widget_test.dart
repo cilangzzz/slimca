@@ -17,8 +17,9 @@
 // savings_progress_card_test.dart）。
 //
 // W7-8（第二个用例）：我的 Tab → raw_input 上云开关默认关（§3.3/§3.7）→
-// 开关写回 settings 表（§5.6⑲ JSON 值）→ 付费墙双轨 SKU 目录（§3.9，
-// Fake 计费流）→ 购买/恢复 SnackBar 反馈链路。
+// 开关写回 settings 表（§5.6⑲ JSON 值）；V1 UX 插曲（《UI-规范与重设计》
+// §4.1）后：设置页按定稿 IA 重排（账号/同步卡→分组卡→尾部低频组），断言
+// 「升级计划」无露出（IAP 代码保留、UI 不露出）+ 危险项确认弹窗（§4.3）。
 //
 // 测试装配：内存 Drift 库 + 固定 device_id 的 HlcClock 直接 override（不跑
 // bootstrap()，避免测试写真实文件库）；feature_capture 网关/解析器按
@@ -40,7 +41,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:slimca/ai/capture_parser_factory.dart';
 import 'package:slimca/app/bootstrap.dart';
 import 'package:slimca/app/providers.dart';
-import 'package:slimca/billing/sku_catalog.dart';
 import 'package:slimca/features/settings/settings_page.dart';
 import 'package:slimca/main.dart';
 
@@ -366,8 +366,9 @@ void main() {
     await _pumpUntilFound(tester, find.text('1/1'));
   });
 
-  testWidgets('W7-8 冒烟：raw_input 上云开关默认关+settings 落库 → 付费墙双轨 '
-      'SKU 目录 → Fake 计费流购买/恢复反馈', (WidgetTester tester) async {
+  testWidgets('W7-8+V1 插曲冒烟：raw_input 上云开关默认关+settings 落库 → '
+      '设置页 IA 重设计（§4.1：无「升级计划」露出、分组卡/行、危险项弹窗）',
+      (WidgetTester tester) async {
     tester.view.physicalSize = const Size(900, 1800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -383,8 +384,9 @@ void main() {
     final clock = HlcClock(deviceId: deviceId);
     await ensureDefaultLedgers(database, clock);
 
-    // W7-8 装配同款最小集（§10.4）：计费走缺省 FakeBillingService（真实
-    // in_app_purchase 待商店账号，W8-9 灰度）；遥测缺省 Noop（零副作用）。
+    // W7-8 装配同款最小集（§10.4）：遥测缺省 Noop（零副作用）。V1 插曲
+    // （《UI-规范与重设计》§4.1）后设置页不再露出付费墙——IAP 抽象代码
+    // （billing_provider/sku_catalog 等）保留不删，UI 无购买触点。
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -399,19 +401,25 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 600));
 
-    // ── 我的 Tab（§4.2：主题/同步状态/AI 开关/数据导出/订阅）────────────
+    // ── 我的 Tab（§4.2：设置页 IA=账号/同步卡→功能分组→低频尾部）────
     await tester.tap(find.text('我的'));
     await tester.pumpAndSettle();
 
-    // 同步状态行（§6.1 顶栏小圆点的设置页对应物；缺省=本地回环待用户凭据）。
+    // 顶部账号/同步卡（§4.1「同步状态只读一行」；缺省=本地回环待用户凭据）
+    // ——同步状态全文唯一出现处（数据分组的「同步」行是动作行，不再复述）。
     expect(find.textContaining('本地回环'), findsOneWidget);
 
-    // raw_input 上云开关（§3.7 数据主权、§3.3 默认关=即用即焚）。
+    // §4.1 分组头（分组卡渲染，SlimcaMenuGroup）。
+    expect(find.text('数据与隐私'), findsOneWidget);
+    expect(find.text('外观'), findsOneWidget);
+    expect(find.text('数据'), findsOneWidget);
+
+    // raw_input 上云开关（§3.7 数据主权、§3.3 默认关=即用即焚；Switch 行）。
     expect(find.text('原文上云（raw_input）'), findsOneWidget);
     final switchFinder = find.byKey(settingsRawInputSwitchKey);
     expect(switchFinder, findsOneWidget);
     expect(
-      tester.widget<SwitchListTile>(switchFinder).value,
+      tester.widget<Switch>(switchFinder).value,
       isFalse,
       reason: '默认关（§3.3）',
     );
@@ -419,7 +427,7 @@ void main() {
     // 开 → 运行期持有翻转 + settings 表落库（§5.6⑲ value 一律 JSON）。
     await tester.tap(switchFinder);
     await tester.pumpAndSettle();
-    expect(tester.widget<SwitchListTile>(switchFinder).value, isTrue);
+    expect(tester.widget<Switch>(switchFinder).value, isTrue);
     final row = await database
         .customSelect(
           "SELECT value FROM settings WHERE key = 'raw_input_cloud_enabled'",
@@ -430,40 +438,38 @@ void main() {
     // 关回默认档（数据主权：随时可撤回，§3.7）。
     await tester.tap(switchFinder);
     await tester.pumpAndSettle();
-    expect(tester.widget<SwitchListTile>(switchFinder).value, isFalse);
+    expect(tester.widget<Switch>(switchFinder).value, isFalse);
 
-    // ── 付费墙占位（§3.9 双轨：买断 + AI 订阅；Fake 内测流）────────────
-    await tester.ensureVisible(find.text('升级 Slimca Pro'));
-    await tester.pumpAndSettle();
-    // 双轨四档目录渲染（价格=待实测复核锚点，§12.3；展示层 ¥xx.xx[/月]）。
-    expect(find.textContaining('Pro 买断（首发档） · ¥98.00'), findsOneWidget);
-    expect(find.textContaining('Pro 买断（标准档） · ¥128.00'), findsOneWidget);
-    expect(find.textContaining('AI 能力订阅（基础档） · ¥12.00/月'), findsOneWidget);
-    expect(find.textContaining('AI 能力订阅（完整档） · ¥18.00/月'), findsOneWidget);
-    // 骨架边界注记可见（真实内购待商店账号 W8-9）。
-    expect(find.textContaining('Fake 计费流'), findsOneWidget);
+    // ── §4.1 移除决策：设置页无「升级计划」露出（IAP 代码保留、UI 不露出，
+    //    转化触点收敛到 AI 免费额度降级提示 §7.4）────────────────────────
+    expect(find.text('升级 Slimca Pro'), findsNothing,
+        reason: '§4.1：「升级计划」整块从主列表移除（产品拍板项）');
+    expect(find.textContaining('恢复购买'), findsNothing,
+        reason: '§4.3：裸「恢复购买」入口随付费墙一并移出');
+    expect(find.textContaining('Pro 买断'), findsNothing);
+    expect(find.textContaining('AI 能力订阅'), findsNothing,
+        reason: '双轨 SKU 目录 UI 不露出（billing 代码保留待商业化）');
+    expect(find.textContaining('Fake 计费流'), findsNothing);
 
-    // 恢复购买（先于购买 → 无历史购买反馈，Fake 流商店口径）。
-    await tester.ensureVisible(find.byKey(settingsRestorePurchasesKey));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(settingsRestorePurchasesKey));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.textContaining('无历史购买'), findsOneWidget);
-    // 刷掉 SnackBar 展示期定时器（默认 4s）与退场动画——避免测试收尾
-    // 「A Timer is still pending」。
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
+    // 分组行渲染（§4.1 IA：外观=主题入口 / 数据=同步+导出 / 尾部=关于+版本）。
+    expect(find.byKey(settingsThemeEntryKey), findsOneWidget);
+    expect(find.text('同步'), findsOneWidget);
+    expect(find.text('数据导出'), findsOneWidget);
+    expect(find.text('关于'), findsOneWidget);
+    expect(find.text('版本'), findsOneWidget);
 
-    // 购买首发档 → purchased + SnackBar 反馈（Fake 流不产生真实扣款）。
-    final buyKey = Key('settings_paywall_buy_${kSkuProLifetimeLaunch.id}');
-    await tester.ensureVisible(find.byKey(buyKey));
+    // ── 危险项确认弹窗（§4.3：独立分组 + 具体动词按钮 + 取消不做默认）──
+    await tester.ensureVisible(find.byKey(settingsClearDataKey));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(buyKey));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.textContaining('已购买'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 5));
+    await tester.tap(find.byKey(settingsClearDataKey));
     await tester.pumpAndSettle();
+    expect(find.text('清空全部数据？'), findsOneWidget);
+    // HIG alerts（§4.3）：按钮用具体动词「清空」，无「OK」。
+    expect(find.widgetWithText(TextButton, '清空'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '取消'), findsOneWidget);
+    // 取消路径：弹窗收起、无任何删除动作。
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(find.text('清空全部数据？'), findsNothing);
   });
 }

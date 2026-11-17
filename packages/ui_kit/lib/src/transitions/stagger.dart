@@ -53,7 +53,10 @@ class SlimcaStaggerItem extends StatelessWidget {
           0.0,
           1.0,
         );
-        final double curved = motion.curveStandard.transform(local);
+        // W17 插曲（UI-规范 §2.2）：级联进场收尾曲线改引 curveExpand
+        // （emphasized-decelerate (0.05,0.7,0.1,1)——「展开/进场段」首批使用方
+        // 即条目级联进场收尾，§5#13 进出场不对称纪律落地）
+        final double curved = motion.curveExpand.transform(local);
         return Opacity(
           opacity: clampDouble(curved, 0.0, 1.0),
           child: Transform.translate(

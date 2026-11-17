@@ -116,6 +116,12 @@ dependencies:
   #   壳层不再直依赖插件。）
   material_color_utilities: ^0.11.1
 
+  # V1 UX 插曲（《UI-规范与重设计》§4.1 尾部低频组「版本」行）：运行时读取
+  # pubspec version+build（原 W1-W16 无此依赖；本包已在 pubspec.lock 以传递
+  # 依赖解析 9.0.1，提升为直接依赖不改锁）。设置页 FutureBuilder 消费——
+  # 插件通道不可用的环境（如 widget 测试）渲染占位「—」，不阻塞页面装配。
+  package_info_plus: ^9.0.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

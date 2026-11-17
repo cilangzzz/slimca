@@ -157,7 +157,14 @@ void main() {
       expect(find.text('今天还没有记录'), findsNothing);
 
       // 点选周历另一天（11-17，周二）→ 共享轴切日（§9.3#2）+ 新一天快照直出。
-      await tester.tap(find.text('17'));
+      // （§3 定稿组合容器中月网格以 0 透明度常驻两层栈内，日号需在周条
+      // SlimcaCalendarStrip 作用域内定位，避免与月格同号歧义。）
+      await tester.tap(
+        find.descendant(
+          of: find.byType(SlimcaCalendarStrip),
+          matching: find.text('17'),
+        ),
+      );
       await tester.pumpAndSettle();
 
       expect(find.text('11月17日'), findsOneWidget);

@@ -15,6 +15,10 @@ export 'src/tokens/contrast.dart';
 export 'src/tokens/theme_profile.dart';
 export 'src/tokens/theme_presets.dart';
 export 'src/tokens/dynamic_color.dart';
+// W17 插曲（UI-规范与重设计.md §2.2）：约束 token 层——间距尺度 + 尺寸/命中/
+// 行高/圆角/状态层
+export 'src/tokens/slimca_spacing.dart';
+export 'src/tokens/slimca_sizes.dart';
 
 // ── P0 关键转场（§9.3 清单：#1 级联 / #2 共享轴 / #3 弹簧抽屉 /
 //    #4 count-up+环 sweep+置信度 pulse / #5 Hero 飞入 / #10 主题 morph）
@@ -33,3 +37,8 @@ export 'src/components/calorie_ring.dart';
 export 'src/components/confirm_card.dart';
 // W16（§8.4）：主题编辑器面板
 export 'src/components/theme_editor_panel.dart';
+// W17 插曲（UI-规范与重设计.md §3/§4）：日历组件族 + 菜单组件族
+export 'src/components/calendar_strip.dart';
+export 'src/components/month_grid.dart';
+export 'src/components/calendar.dart';
+export 'src/components/menu.dart';
