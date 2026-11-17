@@ -83,9 +83,39 @@ final todoDayInstancesProvider = StreamProvider.autoDispose
   return gateway.watchTodoDayInstances(date);
 });
 
-/// 健身计划流（§5.5⑧；W14 前恒空列表）。
+/// 健身计划流（§5.5⑧；W14 起模板/排期/开练全量接入）。
 final fitnessPlansProvider =
     StreamProvider.autoDispose<List<cdb.FitnessPlan>>((ref) {
   final gateway = ref.watch(planGatewayProvider);
   return gateway.watchFitnessPlans();
+});
+
+/// 单计划流（W14 编辑预填/详情；§5.5⑧）。
+final fitnessPlanDetailProvider = StreamProvider.autoDispose
+    .family<cdb.FitnessPlan?, String>((ref, id) {
+  final gateway = ref.watch(planGatewayProvider);
+  return gateway.watchPlanById(id);
+});
+
+/// 全部会话流（W14 训练历史页数据源；手动记录与计划实例共用行模型，
+/// §5.5⑦）。
+final allFitnessSessionsProvider =
+    StreamProvider.autoDispose<List<cdb.FitnessSession>>((ref) {
+  final gateway = ref.watch(planGatewayProvider);
+  return gateway.watchAllSessions();
+});
+
+/// 某会话组明细流（W14 开练页「已落组明细」列表，§5.5⑨）。
+final exerciseSetsBySessionProvider = StreamProvider.autoDispose
+    .family<List<cdb.ExerciseSet>, String>((ref, sessionId) {
+  final gateway = ref.watch(planGatewayProvider);
+  return gateway.watchSetsBySession(sessionId);
+});
+
+/// 会话 → 存活组数映射流（W14 历史页组数徽标；GROUP BY 单查询直驱，
+/// §5.5⑨）。
+final setCountBySessionProvider =
+    StreamProvider.autoDispose<Map<String, int>>((ref) {
+  final gateway = ref.watch(planGatewayProvider);
+  return gateway.watchSetCountsBySession();
 });

@@ -57,6 +57,11 @@ dependencies:
     path: ../../packages/core_ai
   feature_sync:
     path: ../../packages/feature_sync
+  # W14 健身计划模板建档/编辑页装配（§10.4「壳负责装配」）：计划 Tab 排期卡
+  # 「模板」入口 → /plan/plans（feature_plan FitnessPlanPage）——模板=动作/
+  # 组数/重量配比/休息秒+按周排期（§5.5⑧），壳内不重复建档 UI。
+  feature_plan:
+    path: ../../packages/feature_plan
 
   # W2 接线直用依赖（core_db 的传递依赖提升为直接依赖，§10.1）：
   # drift——App 侧 reactive stream 直驱仪表盘（join/watch/事务，§10.1 数据层）；
@@ -86,6 +91,13 @@ dependencies:
   #   口径，与设备时区无关，§5.5⑩）。
   flutter_local_notifications: ^19.0.0
   timezone: ^0.10.0
+
+  # W14 组间计时器接线（§11.2 W14 任务 2）：wakelock_plus——训练进行中
+  #   屏幕常亮（KeepAwakeService 抽象的 wakelock_plus 适配器；Android 走
+  #   FLAG_KEEP_SCREEN_ON 窗口旗标、免 WAKE_LOCK 权限声明，§3.3 最小权限）。
+  #   真实行为真机验收 remaining（集成环境无真机——测试注入 Fake）。
+  #   wakelock_plus ^1.4.0——Dart 3.8 兼容上限（1.5+ 需 Dart 3.10/Flutter 3.38）。
+  wakelock_plus: ^1.4.0
 
 dev_dependencies:
   flutter_test:

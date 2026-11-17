@@ -30,6 +30,8 @@ import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
 import 'package:drift/drift.dart';
 import 'package:feature_capture/feature_capture.dart';
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:feature_sync/feature_sync.dart';
 // Riverpod 3：Override 不在主库 show 清单内，由 misc.dart 导出。
 import 'package:flutter_riverpod/misc.dart';
@@ -51,6 +53,8 @@ import '../sync/sync_backend_factory.dart';
 import '../sync/sync_coordinator.dart';
 import '../sync/telemetry_sync_backend.dart';
 import '../telemetry/telemetry.dart';
+import '../workout/flutter_local_workout_timer_notifier.dart';
+import '../workout/wakelock_plus_keep_awake.dart';
 import 'providers.dart';
 
 /// settings 表中的设备标识键（§5.6⑲：key-value 配置，value 一律 JSON）。
@@ -169,6 +173,14 @@ Future<AppRuntime> bootstrap() async {
     scheduler: reminderScheduler,
   );
 
+  // ── W14 · 组间计时器底座（§11.2 W14 任务 2，§10.4 壳负责装配）：
+  // 唤醒锁（wakelock_plus 适配器，Android FLAG_KEEP_SCREEN_ON 免权限）+
+  // 常驻计时通知（复用 W13 flutter_local_notifications 插件、独立渠道
+  // workout_timer、原生倒计时）。真实行为真机验收 remaining（集成环境无
+  // 真机/无平台通道——测试一律 override Fake，禁真实通道）。
+  const keepAwake = WakelockPlusKeepAwakeService();
+  final workoutTimerNotifier = FlutterLocalWorkoutTimerNotifier();
+
   return AppRuntime(
     overrides: [
       appDatabaseProvider.overrideWithValue(database),
@@ -179,6 +191,12 @@ Future<AppRuntime> bootstrap() async {
       // dart-define 工厂桥接 core_ai 管线（缺省离线桩）。
       captureGatewayProvider.overrideWithValue(
         createCaptureGateway(db: database, clock: clock),
+      ),
+      // W14 计划域装配（§10.4「壳负责装配」）：feature_plan 网关绑定同一
+      // AppDatabase 与应用级 HLC 单例时钟（模板建档/编辑/开练/组明细写路径
+      // 经 PlanGateway——与壳层排期卡/训练中态卡共读同一批真值表，§5.5⑧⑨）。
+      planGatewayProvider.overrideWithValue(
+        createPlanGateway(db: database, clock: clock),
       ),
       captureParserProvider.overrideWithValue(
         TelemetryCaptureParser(
@@ -230,6 +248,10 @@ Future<AppRuntime> bootstrap() async {
       syncCoordinatorProvider.overrideWithValue(coordinator),
       // W13 提醒调度注入点（§11.2 任务 3）：真实通道适配器（测试注入 Fake）。
       reminderSchedulerProvider.overrideWithValue(reminderScheduler),
+      // W14 组间计时器底座注入点（§11.2 W14 任务 2）：唤醒锁 + 常驻计时通知
+      // 真实适配器（测试注入 Fake；真实行为真机验收 remaining）。
+      keepAwakeProvider.overrideWithValue(keepAwake),
+      workoutTimerNotifierProvider.overrideWithValue(workoutTimerNotifier),
     ],
     telemetry: telemetry,
     rawInputPolicy: policy,

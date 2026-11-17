@@ -32,6 +32,7 @@ import '../../data/fitness_service.dart';
 import '../../data/savings_service.dart';
 import '../../telemetry/w13_funnel_events.dart';
 import '../dashboard/dashboard_state.dart';
+import '../workout/workout_session_controller.dart';
 import 'plan_state.dart';
 
 /// 待办输入框测试锚点。
@@ -45,6 +46,19 @@ const Key planFitnessAddKey = ValueKey('plan_fitness_add');
 
 /// 「新建目标」按钮测试锚点。
 const Key planSavingsCreateKey = ValueKey('plan_savings_create');
+
+/// 健身计划卡测试锚点（§11.2 W14 任务 1「计划 Tab 接健身计划入口」）。
+const Key planWorkoutCardKey = ValueKey('plan_workout_card');
+
+/// 「开始训练」按钮测试锚点（`plan_workout_start_<planId>`）。
+Key planWorkoutStartKey(String planId) =>
+    ValueKey('plan_workout_start_$planId');
+
+/// 「模板」入口按钮测试锚点（/plan/plans → feature_plan FitnessPlanPage）。
+const Key planWorkoutTemplatesKey = ValueKey('plan_workout_templates');
+
+/// 「继续训练」按钮测试锚点（该计划已有进行中训练）。
+const Key planWorkoutResumeKey = ValueKey('plan_workout_resume');
 
 /// 目标建档表单锚点（名称/金额/提交）。
 const Key planGoalNameFieldKey = ValueKey('plan_goal_name_field');
@@ -85,6 +99,9 @@ class PlanPage extends ConsumerWidget {
             _PlanTodoCard(date: date),
             const SizedBox(height: 12),
             _PlanFitnessCard(date: date),
+            const SizedBox(height: 12),
+            // W14 健身计划卡（§11.2 W14 任务 1：计划列表/今日排期卡入口）。
+            _PlanWorkoutCard(date: date),
             const SizedBox(height: 12),
             const _PlanSavingsCard(),
           ],
@@ -493,6 +510,231 @@ class _PlanFitnessCard extends ConsumerWidget {
     if (note != null && note.trim().isNotEmpty) return note.trim();
     final label = kFitnessTypeLabels[session.type] ?? '健身';
     return '$label ${session.durationS ~/ 60} 分钟';
+  }
+}
+
+// ── 健身计划卡（§3.5 健身计划 P1、§5.5⑧、§11.2 W14 任务 1）────────────
+
+/// 健身计划卡：今日排期段 + 计划列表段（§3.5「训练模板按周排期」、§5.5⑧）。
+///
+/// - 今日排期段：weekday_mask 命中且已开跑的启用中计划（planScheduleProvider，
+///   随仪表盘选中日 §3.2 一切围绕日期）；行内「开始训练」直开组间计时器
+///   （W14 任务 2/3 副作用链：开练→常亮+常驻通知+workout_started 漏斗）；
+///   该计划已有进行中训练 →「继续训练」回训练页（状态不重建）；
+/// - 计划列表段：启用中计划全集（activeFitnessPlansProvider）——名称+排期日
+///   +起始日；计划模板建档/编辑入口随计划域页面（feature_plan
+///   FitnessPlanPage）装配接入（§10.4），壳内暂不重复建档 UI。
+class _PlanWorkoutCard extends ConsumerWidget {
+  const _PlanWorkoutCard({required this.date});
+
+  /// 排期归属日（随仪表盘选中日，§3.2）。
+  final String date;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tokens = context.slimca;
+    final textTheme = Theme.of(context).textTheme;
+    final schedule = ref.watch(planScheduleProvider(date)).value ??
+        const <FitnessPlanScheduleView>[];
+    final plans = ref.watch(activeFitnessPlansProvider).value ??
+        const <db.FitnessPlan>[];
+    final session = ref.watch(workoutSessionProvider);
+
+    return _PlanCard(
+      child: Column(
+        key: planWorkoutCardKey,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _PlanCardHeader(
+            title: '健身计划',
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // W14 模板建档/编辑入口（§10.4 装配接入）：/plan/plans
+                // 挂 feature_plan FitnessPlanPage（模板=动作/组数/重量配比/
+                // 休息秒+按周排期 §5.5⑧），壳内不重复建档 UI。
+                TextButton.icon(
+                  key: planWorkoutTemplatesKey,
+                  onPressed: () => context.push('/plan/plans'),
+                  icon: const Icon(Icons.edit_calendar_outlined, size: 16),
+                  label: const Text('模板'),
+                ),
+                Text(
+                  '${plans.length} 个启用',
+                  style: textTheme.labelMedium?.copyWith(
+                    color: tokens.onSurfaceMuted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '排期 · ${calendarDayLabel(date)}',
+            style: textTheme.labelMedium?.copyWith(
+              color: tokens.onSurfaceMuted,
+            ),
+          ),
+          const SizedBox(height: 4),
+          if (schedule.isEmpty)
+            Text(
+              '今日无排期。启用中的计划按周掩码自动排期（§5.5⑧）',
+              style: textTheme.bodySmall?.copyWith(
+                color: tokens.onSurfaceMuted,
+              ),
+            )
+          else
+            for (final view in schedule) ...[
+              _PlanScheduleRow(
+                key: ValueKey('plan_schedule_${view.plan.id}'),
+                view: view,
+                isActive: session?.planId == view.plan.id,
+                onStart: () => _start(context, ref, view),
+                onResume: () => context.push('/plan/workout'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          const SizedBox(height: 4),
+          Text(
+            '计划',
+            style: textTheme.labelMedium?.copyWith(
+              color: tokens.onSurfaceMuted,
+            ),
+          ),
+          const SizedBox(height: 4),
+          if (plans.isEmpty)
+            Text(
+              '还没有启用中的健身计划（W14：模板=动作/组数/重量/休息秒，'
+              '按周排期自动出排期卡，§5.5⑧）',
+              style: textTheme.bodySmall?.copyWith(
+                color: tokens.onSurfaceMuted,
+              ),
+            )
+          else
+            for (final plan in plans)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_month_outlined,
+                      size: 16,
+                      color: tokens.kcalOut,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        plan.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodyMedium,
+                      ),
+                    ),
+                    Text(
+                      '${fitnessWeekdaysLabel(plan.weekdayMask)}'
+                      ' · 起始 ${plan.startDate}',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: tokens.onSurfaceMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+
+  /// 开练（§3.5 计划日训练）：置训练中态（常亮+常驻通知+workout_started）
+  /// → 推入训练页（§4.3 /plan/workout 子路由，分支栈内 push）。
+  Future<void> _start(
+    BuildContext context,
+    WidgetRef ref,
+    FitnessPlanScheduleView view,
+  ) async {
+    await ref
+        .read(workoutSessionProvider.notifier)
+        .startFromPlan(view.plan, date: date);
+    if (context.mounted) {
+      await context.push('/plan/workout');
+    }
+  }
+}
+
+/// 排期行：计划名 + 模板摘要 + 开始/继续训练（W14 任务 1）。
+class _PlanScheduleRow extends StatelessWidget {
+  const _PlanScheduleRow({
+    super.key,
+    required this.view,
+    required this.isActive,
+    required this.onStart,
+    required this.onResume,
+  });
+
+  final FitnessPlanScheduleView view;
+
+  /// 该计划已有进行中训练（→ 继续训练）。
+  final bool isActive;
+
+  final VoidCallback onStart;
+  final VoidCallback onResume;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.slimca;
+    final textTheme = Theme.of(context).textTheme;
+    final exercises = view.exercises;
+    final totalSets =
+        exercises.fold(0, (sum, e) => sum + e.sets);
+    final summary = exercises.isEmpty
+        ? '模板待完善（§5.5⑧）'
+        : '${exercises.first.name} 等 ${exercises.length} 个动作 · 共 $totalSets 组';
+    return Row(
+      children: [
+        Icon(Icons.fitness_center, size: 18, color: tokens.kcalOut),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                view.plan.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: tokens.onSurface,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                summary,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.bodySmall?.copyWith(
+                  color: tokens.onSurfaceMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        isActive
+            ? TextButton(
+                key: planWorkoutResumeKey,
+                onPressed: onResume,
+                child: const Text('继续训练'),
+              )
+            : FilledButton.tonal(
+                key: planWorkoutStartKey(view.plan.id),
+                onPressed: onStart,
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: const Text('开始训练'),
+              ),
+      ],
+    );
   }
 }
 

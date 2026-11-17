@@ -85,7 +85,7 @@ class PlanHubPage extends ConsumerWidget {
               accent: tokens.kcalIn,
               title: '健身计划',
               subtitle: (plans == null || plans.isEmpty)
-                  ? 'W14 上线（§3.5 P1）'
+                  ? '模板排期 + 组间计时（§3.5 P1）'
                   : '${plans.length} 个计划',
               onTap: () => _push(context, const FitnessPlanPage()),
             ),

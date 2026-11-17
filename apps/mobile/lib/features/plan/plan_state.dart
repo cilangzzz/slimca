@@ -16,6 +16,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
 import '../../data/fitness_service.dart' show kDefaultBodyWeightKg, kSettingBodyWeightKg;
+import '../../data/workout_models.dart'
+    show WorkoutExercisePlan, parsePlanExercises;
 
 /// 某日待办流（§5.5⑩ todos；未完成在前，TodoDao 排序口径）。
 ///
@@ -126,4 +128,82 @@ final planSavingsGoalsProvider =
         ),
     ];
   });
+});
+
+// ── W14 健身计划流（§3.5 健身计划 P1、§5.5⑧、§11.2 W14 任务 1）────────────
+
+/// 排期视图：计划行 + 宽容解析的模板动作（§5.5⑧ exercises JSON，
+/// parsePlanExercises 坏模板回空——排期卡显示「模板待完善」§7.4）。
+class FitnessPlanScheduleView {
+  const FitnessPlanScheduleView({
+    required this.plan,
+    required this.exercises,
+  });
+
+  /// 计划行（§5.5⑧：name/weekday_mask/exercises/start_date/active）。
+  final db.FitnessPlan plan;
+
+  /// 模板动作（训练会话控制器的排期来源）。
+  final List<WorkoutExercisePlan> exercises;
+
+  /// 排期日标签（bit0=周一…bit6=周日，§5.5⑧）→「一/三/五」。
+  String get weekdaysLabel => fitnessWeekdaysLabel(plan.weekdayMask);
+}
+
+/// 排期掩码 → 排期日标签「一/三/五」（bit0=周一…bit6=周日，§5.5⑧）。
+String fitnessWeekdaysLabel(int weekdayMask) {
+  const labels = ['一', '二', '三', '四', '五', '六', '日'];
+  final days = <String>[
+    for (var bit = 0; bit < 7; bit++)
+      if (weekdayMask & (1 << bit) != 0) labels[bit],
+  ];
+  return days.isEmpty ? '未排期' : days.join('/');
+}
+
+/// 排期掩码判定（§5.5⑧ bit0=周一…bit6=周日）：启用中 + 已开跑（startDate
+/// ≤ 指定日，TEXT 日历日字典序=时间序 §5.1）+ 当日掩码位命中。
+bool isPlanScheduledOn(db.FitnessPlan plan, String date) {
+  if (!plan.active || plan.deletedAt != null) return false;
+  if (plan.startDate.compareTo(date) > 0) return false;
+  final parsed = DateTime.tryParse(date);
+  if (parsed == null) return false;
+  final bit = 1 << (parsed.weekday - 1); // Dart weekday: 1=周一…7=周日。
+  return plan.weekdayMask & bit != 0;
+}
+
+/// 启用中计划流（未删、active；排期卡「计划」列表段数据源）。
+final activeFitnessPlansProvider =
+    StreamProvider.autoDispose<List<db.FitnessPlan>>((ref) {
+  return _watchActivePlans(ref.watch(appDatabaseProvider));
+});
+
+/// 启用中计划 watch 流（单一查询源：activeFitnessPlansProvider 与
+/// planScheduleProvider 共用，避免组合两层 provider——Riverpod 3 中
+/// watch StreamProvider 得 AsyncValue 而非 Stream，§10.1）。
+Stream<List<db.FitnessPlan>> _watchActivePlans(db.AppDatabase database) {
+  return (database.select(database.fitnessPlans)
+        ..where((t) => t.active & t.deletedAt.isNull())
+        ..orderBy([
+          (t) => OrderingTerm.desc(t.startDate),
+          (t) => OrderingTerm.asc(t.createdAt),
+        ]))
+      .watch();
+}
+
+/// 某日排期流（§3.5「训练模板按周排期」：weekday_mask 命中 + 已开跑；
+/// 计划 Tab「今日排期卡」数据源，随仪表盘选中日 §3.2 一切围绕日期）。
+///
+/// 响应式来源 = fitness_plans watch 流（[_watchActivePlans]，与
+/// activeFitnessPlansProvider 同源）；计划行变更（编辑器保存/归档）即时
+/// 重发（§6.1 原则 3 reactive stream 直驱）。
+final planScheduleProvider = StreamProvider.autoDispose
+    .family<List<FitnessPlanScheduleView>, String>((ref, date) {
+  return _watchActivePlans(ref.watch(appDatabaseProvider)).map((plans) => [
+        for (final plan in plans)
+          if (isPlanScheduledOn(plan, date))
+            FitnessPlanScheduleView(
+              plan: plan,
+              exercises: parsePlanExercises(plan.exercises),
+            ),
+      ]);
 });

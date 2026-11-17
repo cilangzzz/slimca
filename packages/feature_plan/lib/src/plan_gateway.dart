@@ -30,6 +30,7 @@ import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'fitness_met_table.dart';
+import 'fitness_plan_models.dart';
 import 'plan_models.dart';
 import 'rrule.dart' show TodoRepeatSpec, parseRrule, rruleOccursOn;
 
@@ -90,9 +91,16 @@ class PlanGateway {
     required this.todos,
     required this.savingsGoals,
     required this.savingsContributions,
-  }) : db = database;
+  })  : db = database,
+        outbox = cdb.SyncOutboxWriter(database);
 
   final cdb.AppDatabase db;
+
+  /// 出网入队器（§5.6⑯/§6.2）：W14 起计划域新增写路径（fitness_plans/
+  /// fitness_sessions/exercise_sets 及其 entry/burn 行）统一经本器在业务写
+  /// **同事务**内读回行快照入队（§6.2「业务行 + sync_outbox 同事务写入」；
+  /// W5-6 的手动记录路径先于本器落地、未入队，见 submitFitnessSession 注记）。
+  final cdb.SyncOutboxWriter outbox;
 
   /// 应用级单例时钟（§6.3）：本网关签发的所有行 HLC 皆源于此。
   final dom.HlcClock clock;
@@ -174,6 +182,11 @@ class PlanGateway {
   ///
   /// start_at 语义（§5.5⑦ 可空）：仅当日记录回填 `now - duration`（手动补记
   /// 无真实开始时刻）；非当日留 null——UI 只按日期归档展示。
+  ///
+  /// outbox 注记（§6.2）：本 W5-6 路径先于 SyncOutboxWriter 落地、业务行未
+  /// 入队（生产同步经 apps/mobile FitnessService 自带入队承担）；W14 起新增
+  /// 写路径（startWorkoutSession/logExerciseSet/finishWorkoutSession/计划
+  /// CRUD）一律经 [outbox] 同事务入队，见「健身计划」小节头注记。
   Future<String> submitFitnessSession(FitnessSessionDraft draft) async {
     // MET 估算（§3.5 kcal = MET × 体重kg × 时长h）；非法入参在此抛错。
     final kcal = estimateKcalBurn(
@@ -647,15 +660,452 @@ class PlanGateway {
         status: cdb.kSavingsGoalStatusCompleted,
       );
 
-  // ── 健身计划（§3.5 占位、§5.5⑧；W14 全量功能）────────────────────
+  // ── 健身计划（§3.5 健身计划 P1 留存钩子、§5.5⑧⑨、§11.2 W14 全量）────
+  //
+  // 写路径纪律（§6.2）：fitness_plans / fitness_sessions / exercise_sets 均为
+  // §5.1 同步真值表，业务行与行快照**同事务**入队 sync_outbox（[outbox]）；
+  // 汇总路径的 entries/entry_lines 复用仓库写（软删墓碑/投影联动契约，
+  // §10.4），仓库写后在同事务内补行快照入队（仓库层不做 outbox，装配纪律）。
+  //
+  // 会话时序口径（§11.2 W14 任务 3）：**开练即建会话行**（start_at 真值、
+  // duration/kcal 暂 0），每完成一组落 exercise_sets（父行先于子行，pull
+  // 依赖序 §6.2；中途退出已完成组不丢）；「完成训练」在单事务内汇总——
+  // duration=start_at 起算的真实墙钟时长、kcal 走既有 MET 逻辑（§3.5）、
+  // entries(kind=fitness)+entry_lines(type=burn) 联动（复用 W5-6 链路）。
 
-  /// 计划列表（未删；起始日倒序）。W5-6 无写路径（W14 接入排期/模板），
-  /// 占位页据此渲染空态。
+  /// 计划列表（未删；起始日倒序）。
   Stream<List<cdb.FitnessPlan>> watchFitnessPlans() {
     return (db.select(db.fitnessPlans)
           ..where((t) => t.deletedAt.isNull())
           ..orderBy([(t) => OrderingTerm.desc(t.startDate)]))
         .watch();
+  }
+
+  /// 单计划流（编辑预填/详情）。
+  Stream<cdb.FitnessPlan?> watchPlanById(String id) {
+    return (db.select(db.fitnessPlans)..where((t) => t.id.equals(id)))
+        .watchSingleOrNull();
+  }
+
+  /// 单计划读取（一次性）。
+  Future<cdb.FitnessPlan?> findPlanById(String id) {
+    return (db.select(db.fitnessPlans)..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+  }
+
+  /// 新建健身计划（§5.5⑧）：模板=名称+动作列表+按周排期掩码。
+  ///
+  /// - [exercises] 走 [FitnessPlanTemplate.encode] 落 exercises 列（§5.5⑧
+  ///   「排期模板：动作/组数/重量配比/休息秒」，形状见 fitness_plan_models）；
+  /// - [weekdayMask] bit0=周一…bit6=周日（§5.5⑧）；空掩码=纯模板（可开练、
+  ///   不出现在任何排期日）；
+  /// - [startDate] 缺省=设备本地今日（§5.5⑧ start_date）。
+  Future<cdb.FitnessPlan> createFitnessPlan({
+    required String name,
+    required int weekdayMask,
+    required List<PlanExercise> exercises,
+    String? startDate,
+    bool active = true,
+  }) async {
+    final stamp = _nextStamp();
+    final rowId = _newId();
+    final effectiveStartDate = startDate ??
+        dom.formatCalendarDay(DateTime.fromMillisecondsSinceEpoch(_nowMs));
+    await db.transaction(() async {
+      await db.into(db.fitnessPlans).insert(cdb.FitnessPlan(
+            id: rowId,
+            name: name,
+            weekdayMask: weekdayMask,
+            exercises: FitnessPlanTemplate(exercises: exercises).encode(),
+            startDate: effectiveStartDate,
+            active: active,
+            createdAt: stamp.updatedAtMs,
+            updatedAt: stamp.updatedAtMs,
+            deletedAt: null,
+            hlc: stamp.hlc,
+            revision: 1,
+            schemaVer: dom.kCurrentSchemaVer,
+            deviceId: clock.deviceId,
+          ));
+      // §6.2 写路径纪律：行快照同事务入队（§5.6⑯）。
+      await outbox.enqueueRow('fitness_plans', rowId);
+    });
+    return (await findPlanById(rowId))!;
+  }
+
+  /// 更新计划字段（名称/排期掩码/模板/启用/起始日）。
+  ///
+  /// 各可变参数缺省传「不改动」哨兵（本类沿用 TodoDao.updateDetails 的
+  /// Object 哨兵口径）；[exercises] 传 `List<PlanExercise>`（内部编码落列）。
+  Future<void> updateFitnessPlanDetails({
+    required String id,
+    Object? name = _unchanged,
+    Object? weekdayMask = _unchanged,
+    Object? exercises = _unchanged,
+    Object? active = _unchanged,
+    Object? startDate = _unchanged,
+  }) async {
+    final List<PlanExercise>? exerciseList =
+        exercises == _unchanged ? null : exercises as List<PlanExercise>?;
+    await db.transaction(() async {
+      final row = await (db.select(db.fitnessPlans)
+            ..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      if (row == null) {
+        throw StateError('updateFitnessPlanDetails: 无此计划 $id（§5.5⑧）');
+      }
+      final stamp = _nextStamp();
+      await (db.update(db.fitnessPlans)..where((t) => t.id.equals(id))).write(
+        cdb.FitnessPlansCompanion(
+          name: name == _unchanged
+              ? const Value.absent()
+              : Value(name as String),
+          weekdayMask: weekdayMask == _unchanged
+              ? const Value.absent()
+              : Value(weekdayMask as int),
+          exercises: exerciseList == null
+              ? const Value.absent()
+              : Value(FitnessPlanTemplate(exercises: exerciseList).encode()),
+          active:
+              active == _unchanged ? const Value.absent() : Value(active as bool),
+          startDate: startDate == _unchanged
+              ? const Value.absent()
+              : Value(startDate as String),
+          updatedAt: Value(stamp.updatedAtMs),
+          hlc: Value(stamp.hlc),
+          revision: Value(row.revision + 1),
+        ),
+      );
+      // §6.2：主干变更同事务入队（§5.6⑯）。
+      await outbox.enqueueRow('fitness_plans', id);
+    });
+  }
+
+  /// 删除计划（软删墓碑，§5.1/§6.5 墓碑拒绝复活）。既有会话行不受影响
+  /// （fitness_sessions.plan_day_id 为逻辑前向引用，§5.5⑦）。
+  Future<void> deleteFitnessPlan(String id) async {
+    await db.transaction(() async {
+      final row = await (db.select(db.fitnessPlans)
+            ..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      if (row == null) return; // 幂等 no-op
+      final hlc = clock.now();
+      if (row.deletedAt == null) {
+        await (db.update(db.fitnessPlans)..where((t) => t.id.equals(id)))
+            .write(cdb.FitnessPlansCompanion(
+          deletedAt: Value(hlc.physicalMs),
+          updatedAt: Value(hlc.physicalMs),
+          hlc: Value(hlc.format()),
+          revision: Value(row.revision + 1),
+        ));
+        // §6.2：墓碑快照入队（读侧自动以 delete 语义出网，§5.6⑯）。
+        await outbox.enqueueRow('fitness_plans', id);
+      }
+    });
+  }
+
+  /// 开练（§11.2 W14 任务 2「从排期或模板发起当日训练」）：**建会话行**
+  /// （§5.5⑦ type=template_instance、source=plan、start_at=开练时刻）。
+  ///
+  /// - [date] 归属日（本地日历日，§5.1）；[tzOffsetMin] 缺省取当前时区偏移；
+  /// - plan_day_id 落 plan id：v1 无独立排期日表（§5.5⑦ planDayId 注记），
+  ///   排期日语义 =（plan_day_id, date）二元组，掩码宿主即计划行；
+  /// - duration_s/kcal_burn 落 0，训练结束由 [finishWorkoutSession] 汇总
+  ///   （§11.2 W14 任务 3）；会话行先于组明细存在，pull 依赖序父→子（§6.2）。
+  Future<cdb.FitnessSession> startWorkoutSession({
+    required String planId,
+    required String date,
+    int? tzOffsetMin,
+  }) async {
+    final now = DateTime.fromMillisecondsSinceEpoch(_nowMs);
+    final effectiveTz = tzOffsetMin ?? now.timeZoneOffset.inMinutes;
+    return db.transaction(() async {
+      final plan = await (db.select(db.fitnessPlans)
+            ..where((t) => t.id.equals(planId)))
+          .getSingleOrNull();
+      if (plan == null || plan.deletedAt != null) {
+        throw StateError('startWorkoutSession: 无此计划 $planId（§5.5⑧）');
+      }
+      final stamp = _nextStamp();
+      final rowId = _newId();
+      await db.into(db.fitnessSessions).insert(cdb.FitnessSession(
+            id: rowId,
+            date: date,
+            tzOffsetMin: effectiveTz,
+            startAt: stamp.updatedAtMs, // 开练时刻（§5.5⑦ start_at 真值）
+            durationS: 0, // 完成训练时汇总（§11.2 W14 任务 3）
+            type: kFitnessSessionTypeTemplateInstance,
+            kcalBurn: 0,
+            entryId: null, // 完成训练时联动 entry+burn 行（§5.5⑦）
+            source: kFitnessSessionSourcePlan,
+            planDayId: planId,
+            note: null,
+            createdAt: stamp.updatedAtMs,
+            updatedAt: stamp.updatedAtMs,
+            deletedAt: null,
+            hlc: stamp.hlc,
+            revision: 1,
+            schemaVer: dom.kCurrentSchemaVer,
+            deviceId: clock.deviceId,
+          ));
+      // §6.2：会话行快照同事务入队（§5.6⑯）。
+      await outbox.enqueueRow('fitness_sessions', rowId);
+      return (db.select(db.fitnessSessions)..where((t) => t.id.equals(rowId)))
+          .getSingle();
+    });
+  }
+
+  /// 完成一组（§11.2 W14 任务 3「每完成一组落 exercise_sets 行」）：落
+  /// session_id/动作/组序/次数/重量/休息秒 + done_at 完成时刻——**完成标记=
+  /// done_at 非空**（§5.5⑨ 冻结列口径：W14 只在完成时落行，append-only，
+  /// §6.1 原则 2），行快照同事务入队。
+  ///
+  /// [sort] 缺省=该会话已有存活组数+1（会话内全局组序，§5.5⑨ sort）。
+  Future<cdb.ExerciseSet> logExerciseSet({
+    required String sessionId,
+    required String exerciseRef,
+    required int reps,
+    required int weightKgX10,
+    int? restS,
+    double? rpe,
+    int? sort,
+  }) {
+    assert(reps >= 1, '次数必须 ≥1（§5.5⑨ reps）');
+    assert(weightKgX10 >= 0, '重量必须非负（§5.5⑨ 定点 ×10）');
+    return db.transaction(() async {
+      final session = await (db.select(db.fitnessSessions)
+            ..where((t) => t.id.equals(sessionId)))
+          .getSingleOrNull();
+      if (session == null || session.deletedAt != null) {
+        throw StateError('logExerciseSet: 无此会话 $sessionId（§5.5⑦）');
+      }
+      final existing = await (db.select(db.exerciseSets)
+            ..where((t) =>
+                t.sessionId.equals(sessionId) & t.deletedAt.isNull()))
+          .get();
+      final stamp = _nextStamp();
+      final rowId = _newId();
+      await db.into(db.exerciseSets).insert(cdb.ExerciseSet(
+            id: rowId,
+            sessionId: sessionId,
+            exerciseRef: exerciseRef,
+            weightKgX10: weightKgX10,
+            reps: reps,
+            rpe: rpe,
+            restS: restS,
+            doneAt: stamp.updatedAtMs, // 完成标记（§5.5⑨ done_at）
+            sort: sort ?? existing.length + 1,
+            createdAt: stamp.updatedAtMs,
+            updatedAt: stamp.updatedAtMs,
+            deletedAt: null,
+            hlc: stamp.hlc,
+            revision: 1,
+            schemaVer: dom.kCurrentSchemaVer,
+            deviceId: clock.deviceId,
+          ));
+      // §6.2：组明细快照同事务入队（§5.6⑯）。
+      await outbox.enqueueRow('exercise_sets', rowId);
+      return (db.select(db.exerciseSets)..where((t) => t.id.equals(rowId)))
+          .getSingle();
+    });
+  }
+
+  /// 完成训练（§11.2 W14 任务 3「训练结束汇总」）：单事务内——
+  /// 1. duration_s = start_at 起算的真实墙钟时长（秒）；
+  /// 2. kcal_burn 走既有 MET 逻辑（§3.5 公式、[kFitnessPlanMetActivityId]
+  ///    中档 MET；时长 0 → 0 kcal，不走估算）；
+  /// 3. entries(kind=fitness)+entry_lines(type=burn,out) 同事务联动（复用
+  ///    W5-6 链路 [entries]/[entryLines]，投影当日 kcal_out 即时重算 §5.6），
+  ///    burn 行 payload 记 session_id/plan_id/MET 参数（§5.2②）；
+  /// 4. 会话行回填 duration/kcal/entry_id，行快照入队。
+  ///
+  /// 幂等：entry_id 已非空（已汇总）→ 直接返回既有行（双击/重复 finish 不
+  /// 重复产出行）；无组明细抛 StateError（空会话由退出清理路径软删，§11.2
+  /// W14 UI 口径）。
+  Future<cdb.FitnessSession> finishWorkoutSession({
+    required String sessionId,
+    required double weightKg,
+    String? note,
+  }) async {
+    if (weightKg <= 0) {
+      throw ArgumentError.value(weightKg, 'weightKg',
+          '体重必须为正（MET 估算输入，§3.5 身体档案）');
+    }
+    final kcalLedger = await _ensureKcalLedger();
+    final metActivity =
+        findFitnessActivity(kFitnessPlanMetActivityId) ??
+            kFitnessActivities.first;
+    return db.transaction(() async {
+      final session = await (db.select(db.fitnessSessions)
+            ..where((t) => t.id.equals(sessionId)))
+          .getSingleOrNull();
+      if (session == null || session.deletedAt != null) {
+        throw StateError('finishWorkoutSession: 无此会话 $sessionId（§5.5⑦）');
+      }
+      if (session.entryId != null) {
+        return session; // 幂等：已汇总（§6.1 不重复产出事实行）
+      }
+      final sets = await (db.select(db.exerciseSets)
+            ..where(
+                (t) => t.sessionId.equals(sessionId) & t.deletedAt.isNull()))
+          .get();
+      if (sets.isEmpty) {
+        throw StateError(
+          'finishWorkoutSession: 会话 $sessionId 无组明细（§11.2 W14：'
+          '空会话不入账，退出路径清理）',
+        );
+      }
+      final plan = session.planDayId == null
+          ? null
+          : await (db.select(db.fitnessPlans)
+                ..where((t) => t.id.equals(session.planDayId!)))
+              .getSingleOrNull();
+      // 时长（§5.5⑦ duration_s）：start_at 起算真实墙钟秒（开练即建行的代价
+      // 与收益一致——含组间休息的真实训练时长）。
+      final durationS = session.startAt == null
+          ? 0
+          : (_nowMs - session.startAt!) ~/ 1000;
+      // MET 估算（§3.5 既有逻辑复用；时长 0 跳过估算——estimateKcalBurn
+      // 对非正时长抛 ArgumentError，防御口径）。
+      final kcal = durationS <= 0
+          ? 0
+          : estimateKcalBurn(
+              activity: metActivity,
+              intensity: FitnessIntensity.mid,
+              durationS: durationS,
+              weightKg: weightKg,
+            );
+      final minutes = durationS ~/ 60;
+      final entryId = _newId();
+      final entryMeta = _newMeta();
+      final title = '${plan?.name ?? metActivity.name} $minutes 分钟';
+      final payload = jsonEncode(<String, Object?>{
+        'session_id': sessionId,
+        'plan_id': session.planDayId,
+        'plan_name': plan?.name,
+        'activity_id': metActivity.id,
+        'met': metActivity.metFor(FitnessIntensity.mid),
+        'weight_kg': weightKg,
+        'duration_s': durationS,
+        'sets': sets.length,
+      }..removeWhere((k, v) => v == null));
+
+      // ① 事件主干（§5.2① kind=fitness；source=manual——entries.source 枚举
+      //    §5.2① 无 plan 档，计划语义由 fitness_sessions.source 承担）。
+      await entries.upsert(dom.Entry(
+        id: entryId,
+        date: session.date,
+        tzOffsetMin: session.tzOffsetMin,
+        occurredAt: _nowMs,
+        kind: dom.EntryKind.fitness,
+        source: dom.EntrySource.manual,
+        title: title,
+        note: note ?? session.note,
+        status: dom.EntryStatus.confirmed,
+        aiParseId: null,
+        meta: entryMeta,
+      ));
+      // ② burn 产出行（§5.2② type=burn/out；人工行无置信度；投影重算在
+      //    仓库事务内完成，外层事务 join，§5.6）。
+      final lineId = _newId();
+      await entryLines.upsert(dom.EntryLine(
+        id: lineId,
+        entryId: entryId,
+        type: dom.LineType.burn,
+        amount: kcal,
+        direction: dom.LineDirection.outcome,
+        ledgerId: kcalLedger.id,
+        categoryId: null,
+        currency: null,
+        confidence: null,
+        payload: payload,
+        correctionOf: null,
+        status: dom.LineStatus.active,
+        meta: _newMeta(),
+      ));
+      // ③ 会话行回填汇总值（§5.5⑦）。
+      final stamp = _nextStamp();
+      await (db.update(db.fitnessSessions)
+            ..where((t) => t.id.equals(sessionId)))
+          .write(cdb.FitnessSessionsCompanion(
+        durationS: Value(durationS),
+        kcalBurn: Value(kcal),
+        entryId: Value(entryId),
+        note: note == null ? const Value.absent() : Value(note),
+        updatedAt: Value(stamp.updatedAtMs),
+        hlc: Value(stamp.hlc),
+        revision: Value(session.revision + 1),
+      ));
+      // ④ §6.2 出网：会话/事件/burn 行快照同事务入队（仓库层不做 outbox，
+      //    装配纪律——见本节头注记）。
+      await outbox.enqueueRow('fitness_sessions', sessionId);
+      await outbox.enqueueRow('entries', entryId);
+      await outbox.enqueueRow('entry_lines', lineId);
+      return (db.select(db.fitnessSessions)
+            ..where((t) => t.id.equals(sessionId)))
+          .getSingle();
+    });
+  }
+
+  /// 会话行读取（一次性；开练页控制器装载）。
+  Future<cdb.FitnessSession?> findSessionById(String sessionId) {
+    return (db.select(db.fitnessSessions)
+          ..where((t) => t.id.equals(sessionId)))
+        .getSingleOrNull();
+  }
+
+  /// 会话组明细（一次性，组序升序；开练控制器断点续练恢复游标）。
+  Future<List<cdb.ExerciseSet>> setsForSession(String sessionId) {
+    return (db.select(db.exerciseSets)
+          ..where((t) =>
+              t.sessionId.equals(sessionId) & t.deletedAt.isNull())
+          ..orderBy([(t) => OrderingTerm.asc(t.sort)]))
+        .get();
+  }
+
+  /// 会话组明细流（§10.1 reactive：开练页「已落组明细」直驱）。
+  Stream<List<cdb.ExerciseSet>> watchSetsBySession(String sessionId) {
+    return (db.select(db.exerciseSets)
+          ..where((t) =>
+              t.sessionId.equals(sessionId) & t.deletedAt.isNull())
+          ..orderBy([(t) => OrderingTerm.asc(t.sort)]))
+        .watch();
+  }
+
+  /// 全部会话流（未删；W14 训练历史页数据源，按日/按计划分组由页面承担）。
+  /// 手动记录（W5-6）与计划实例（W14）共用 fitness_sessions 行模型（§5.5⑦）。
+  Stream<List<cdb.FitnessSession>> watchAllSessions() {
+    return (db.select(db.fitnessSessions)
+          ..where((t) => t.deletedAt.isNull())
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.date),
+            (t) => OrderingTerm.desc(t.startAt),
+            (t) => OrderingTerm.desc(t.createdAt),
+          ]))
+        .watch();
+  }
+
+  /// 会话 → 存活组数映射流（§5.5⑨ GROUP BY 单查询；历史页组数徽标，
+  /// 避免逐会话订阅）。
+  Stream<Map<String, int>> watchSetCountsBySession() {
+    return db
+        .customSelect(
+          'SELECT session_id, COUNT(*) AS cnt FROM exercise_sets '
+          'WHERE deleted_at IS NULL GROUP BY session_id',
+          readsFrom: {db.exerciseSets},
+        )
+        .watch()
+        .map((rows) => {
+              for (final row in rows)
+                row.read<String>('session_id'): row.read<int>('cnt'),
+            });
+  }
+
+  /// 本地写入戳（§5.1 公共列 + §6.3 HLC；网关侧统一入口——W14 起
+  /// fitness_plans/exercise_sets 等直写路径经此发戳，与会话行同口径）。
+  ({String hlc, int updatedAtMs}) _nextStamp() {
+    final hlc = clock.now();
+    return (hlc: hlc.format(), updatedAtMs: hlc.physicalMs);
   }
 
   /// 「不改动」哨兵（透传 TodoDao.updateDetails 口径）。

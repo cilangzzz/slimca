@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:core_domain/core_domain.dart' show formatCalendarDay;
 import 'package:feature_capture/feature_capture.dart' show CaptureSeed;
+import 'package:feature_plan/feature_plan.dart' show FitnessPlanPage;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -13,6 +14,7 @@ import '../features/ledger/ledger_page.dart';
 import '../features/plan/fitness_log_page.dart';
 import '../features/plan/plan_page.dart';
 import '../features/settings/settings_page.dart';
+import '../features/workout/workout_runner_page.dart';
 import '../telemetry/telemetry.dart';
 import 'providers.dart';
 
@@ -54,8 +56,10 @@ final GoRouter slimcaRouter = GoRouter(
             ),
           ],
         ),
-        // Tab 3 计划：待办/健身/存钱三卡（W5-6 真页，§4.2）+ 健身手动记录
-        // 子路由（§4.3 /plan/fitness P1 路由，W5-6 接入）。
+        // Tab 3 计划：待办/健身/存钱/健身计划四卡（W5-6 真页 + W14 排期卡，
+        // §4.2）+ 健身手动记录子路由（§4.3 /plan/fitness P1 路由，W5-6 接入）
+        // + 训练中页子路由（§11.2 W14 任务 1/2：/plan/workout，排期卡
+        // 「开始训练」置态后推入，分支栈内 push）。
         StatefulShellBranch(
           routes: [
             GoRoute(
@@ -65,6 +69,17 @@ final GoRouter slimcaRouter = GoRouter(
                 GoRoute(
                   path: 'fitness',
                   builder: (context, state) => const FitnessLogPage(),
+                ),
+                GoRoute(
+                  path: 'workout',
+                  builder: (context, state) => const WorkoutRunnerPage(),
+                ),
+                // W14 健身计划模板管理（§11.2 W14 任务 1、§10.4 装配接入）：
+                // feature_plan FitnessPlanPage——模板建档/编辑/删除+周排期
+                // 日历+训练历史入口（壳内不重复建档 UI，计划卡「模板」进入）。
+                GoRoute(
+                  path: 'plans',
+                  builder: (context, state) => const FitnessPlanPage(),
                 ),
               ],
             ),

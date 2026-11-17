@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' show clampDouble;
 
 import 'package:core_db/core_db.dart' as db;
@@ -11,7 +12,18 @@ import 'package:feature_capture/feature_capture.dart'
 
 import '../../app/providers.dart';
 import '../../common/format.dart';
+import '../workout/workout_session_controller.dart'
+    show workoutSessionProvider;
 import 'dashboard_state.dart';
+
+/// 训练中态卡·剩余秒测试锚点（§11.2 W14 任务 4）。
+const Key workoutCardRestKey = ValueKey('workout_card_rest_remaining');
+
+/// 训练中态卡·跳过休息测试锚点。
+const Key workoutCardSkipRestKey = ValueKey('workout_card_skip_rest');
+
+/// 训练中态卡·结束并保存测试锚点。
+const Key workoutCardEndKey = ValueKey('workout_card_end_save');
 
 /// 日期仪表盘（§3.2；W2：卡片墙由明细行 reactive stream 实时驱动——
 /// 「手动记一笔→仪表盘环/支出卡即时更新」验收线，§11 W2）。
@@ -229,22 +241,182 @@ class _CardWall extends ConsumerWidget {
           child: _CalorieRingCard(day: day, budget: budget),
         ),
         const SizedBox(height: 12),
+        // W14 训练中态卡（§11.2 W14 任务 4：当日进行中训练显示剩余休息秒，
+        // 读 workoutSessionProvider Riverpod 状态；无训练/非当日不占位）。
+        SlimcaStaggerItem(index: 1, child: _WorkoutCard(date: date)),
+        const SizedBox(height: 12),
         // 支出/运动两卡等高并排：本卡片墙位于 ListView（子项高度无界）内，
         // Row 直接 stretch 会拿到无限高度而布局崩溃，故 IntrinsicHeight 先取
         // 双卡固有高度作为有界约束（§3.2 卡片墙）。
-        SlimcaStaggerItem(index: 1, child: _SpendBurnRow(day: day)),
+        SlimcaStaggerItem(index: 2, child: _SpendBurnRow(day: day)),
         const SizedBox(height: 12),
-        SlimcaStaggerItem(index: 2, child: _TodoCard(todos: todos)),
+        SlimcaStaggerItem(index: 3, child: _TodoCard(todos: todos)),
         const SizedBox(height: 12),
-        SlimcaStaggerItem(index: 3, child: _SavingsCard(date: date)),
+        SlimcaStaggerItem(index: 4, child: _SavingsCard(date: date)),
         const SizedBox(height: 12),
-        SlimcaStaggerItem(index: 4, child: _TodayEntriesCard(day: day)),
+        SlimcaStaggerItem(index: 5, child: _TodayEntriesCard(day: day)),
         const SizedBox(height: 16),
         SlimcaStaggerItem(
-          index: 5,
+          index: 6,
           child: day.entries.isEmpty ? const _EmptyHint() : const SizedBox.shrink(),
         ),
       ],
+    );
+  }
+}
+
+/// 训练中态卡（§11.2 W14 任务 4「训练中态卡（当日进行中训练显示剩余休息
+/// 秒，读 Riverpod provider）」、§3.2 卡片墙「当日全貌」的瞬时项）。
+///
+/// - 显示条件：有进行中训练（workoutSessionProvider）且其归属日=当前选中日
+///   （§3.2 一切围绕日期）；否则不占位（SizedBox.shrink，§2.3 零等待空屏）；
+/// - 剩余休息秒：绝对时刻 + 注入时钟（workoutClockProvider）即时重算——
+///   本卡 Timer.periodic(1s) 只做渲染节奏与到点探询（syncRest），秒值语义
+///   不依赖真实计时器（W14 任务 5 测试经注入时钟 + pump 推进）；
+/// - 「结束并保存」走控制器 endWorkout（落库 §6.2 + workout_completed +
+///   KeepAwake off + 通知 cancel，W14 任务 5 断言 off）。
+class _WorkoutCard extends ConsumerStatefulWidget {
+  const _WorkoutCard({required this.date});
+
+  /// 归属日 `yyyy-MM-dd`（§5.1；=卡片墙当日）。
+  final String date;
+
+  @override
+  ConsumerState<_WorkoutCard> createState() => _WorkoutCardState();
+}
+
+class _WorkoutCardState extends ConsumerState<_WorkoutCard> {
+  Timer? _ticker;
+  int _lastRestSeconds = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
+
+  void _tick() {
+    if (!mounted) return;
+    final nowMs = ref.read(workoutClockProvider)().millisecondsSinceEpoch;
+    // 到点探询（业务推进经控制器，注入时钟判定；未到点 no-op 不重发）。
+    ref.read(workoutSessionProvider.notifier).syncRest(nowMs: nowMs);
+    final session = ref.read(workoutSessionProvider);
+    final seconds = session?.remainingRestSeconds(nowMs) ?? -1;
+    if (seconds != _lastRestSeconds) {
+      _lastRestSeconds = seconds;
+      if (mounted) setState(() {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = ref.watch(workoutSessionProvider);
+    if (session == null || session.date != widget.date) {
+      return const SizedBox.shrink();
+    }
+    final tokens = context.slimca;
+    final textTheme = Theme.of(context).textTheme;
+    final nowMs =
+        ref.watch(workoutClockProvider)().millisecondsSinceEpoch;
+    final resting = session.isResting;
+    final remaining = session.remainingRestSeconds(nowMs);
+
+    return _DashboardCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.fitness_center, color: tokens.kcalOut),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '训练中 · ${session.planName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.titleMedium,
+                ),
+              ),
+              Text(
+                '已完成 ${session.sets.length} 组',
+                style: textTheme.labelMedium?.copyWith(
+                  color: tokens.onSurfaceMuted,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (resting)
+            // 剩余休息秒（W14 任务 4 核心验收：注入时钟对 rest_ends_at 的
+            // 即时重算；跳过休息直开下一组）。
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: tokens.kcalOut.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  Text(
+                    '组间休息',
+                    style: textTheme.labelMedium?.copyWith(
+                      color: tokens.onSurfaceMuted,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    '$remaining',
+                    key: workoutCardRestKey,
+                    style: textTheme.headlineSmall?.copyWith(
+                      color: tokens.kcalOut,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '秒后下一组',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: tokens.onSurfaceMuted,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    key: workoutCardSkipRestKey,
+                    onPressed: () => ref
+                        .read(workoutSessionProvider.notifier)
+                        .skipRest(),
+                    child: const Text('跳过'),
+                  ),
+                ],
+              ),
+            )
+          else
+            Text(
+              session.allDone
+                  ? '全部组完成 · 结束并保存入账（§5.5⑦）'
+                  : '当前：${session.currentExercise.name}'
+                      ' · 第 ${session.setNo}/${session.currentExercise.sets} 组',
+              style: textTheme.bodyMedium?.copyWith(
+                color: tokens.onSurfaceMuted,
+              ),
+            ),
+          const SizedBox(height: 12),
+          FilledButton.tonal(
+            key: workoutCardEndKey,
+            onPressed: () => ref
+                .read(workoutSessionProvider.notifier)
+                .endWorkout(save: true),
+            child: const Text('结束并保存'),
+          ),
+        ],
+      ),
     );
   }
 }

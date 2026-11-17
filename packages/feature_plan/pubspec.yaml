@@ -1,6 +1,6 @@
 name: feature_plan
 resolution: workspace
-description: "Slimca 计划域：健身手动记录（MET 估算→消耗行）、待办（今日/收集箱，勾选联动投影）、存钱目标与健身计划占位（§3.5/§3.6/§5.5、§11.1 W5-6、§10.4）。"
+description: "Slimca 计划域：健身手动记录（MET 估算→消耗行）、待办（重复/提醒）、存钱目标、健身计划（模板排期/组间计时/组明细/训练历史，§3.5/§3.6/§5.5、§11.1 W5-6、§11.2 W13-W14、§10.4）。"
 version: 0.0.1
 publish_to: none
 homepage:

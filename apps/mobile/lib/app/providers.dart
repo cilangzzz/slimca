@@ -25,6 +25,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/drift_repositories.dart';
 import '../data/savings_service.dart';
+import '../data/workout_log_service.dart' show WorkoutLogService;
 import '../notifications/flutter_local_reminder_scheduler.dart'
     show FlutterLocalReminderScheduler;
 import '../notifications/reminder_scheduler.dart' show ReminderScheduler;
@@ -32,6 +33,12 @@ import '../settings/raw_input_setting.dart';
 import '../sync/sync_backend_factory.dart';
 import '../sync/sync_coordinator.dart';
 import '../telemetry/telemetry.dart';
+import '../workout/keep_awake_service.dart' show KeepAwakeService;
+import '../workout/flutter_local_workout_timer_notifier.dart'
+    show FlutterLocalWorkoutTimerNotifier;
+import '../workout/rest_timer_notifier.dart' show WorkoutTimerNotifier;
+import '../workout/wakelock_plus_keep_awake.dart'
+    show WakelockPlusKeepAwakeService;
 
 export '../billing/billing_provider.dart' show billingServiceProvider;
 
@@ -127,6 +134,44 @@ final savingsServiceProvider = Provider<SavingsService>((ref) {
 /// 禁真实通知/平台通道）。
 final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
   return FlutterLocalReminderScheduler();
+});
+
+// ── W14 装配（§11.2 W14：健身计划/组间计时器/漏斗）────────────────────
+
+/// 唤醒锁注入点（W14 任务 2「KeepAwakeService 抽象 + wakelock_plus 适配器」，
+/// §10.4 壳负责装配）。
+///
+/// 缺省 = [WakelockPlusKeepAwakeService]（wakelock_plus 真实适配器；构造
+/// 零副作用，平台通道在首法调用时发生，异常内部静默降级）。测试一律
+/// override 记录型 Fake（FakeKeepAwakeService，禁真实平台通道）。
+final keepAwakeProvider = Provider<KeepAwakeService>((ref) {
+  return const WakelockPlusKeepAwakeService();
+});
+
+/// 常驻计时通知注入点（W14 任务 2「通知常驻计时，复用 W13
+/// flutter_local_notifications 适配器」，§10.4 壳负责装配）。
+///
+/// 缺省 = [FlutterLocalWorkoutTimerNotifier]（与 W13 同一插件、同款惰性
+/// 初始化，独立渠道 workout_timer）。测试一律 override 记录型 Fake
+/// （FakeWorkoutTimerNotifier，禁真实通知）。
+final workoutTimerNotifierProvider = Provider<WorkoutTimerNotifier>((ref) {
+  return FlutterLocalWorkoutTimerNotifier();
+});
+
+/// 训练域注入时钟（W14 任务 5「Fake/注入时钟」）：控制器与 UI 的一切时刻
+/// 判定经本函数取 now——测试 override 可控时钟（pump 推进），禁真实计时器
+/// 断言；生产缺省 = 设备墙钟。
+final workoutClockProvider =
+    Provider<DateTime Function()>((ref) => DateTime.now);
+
+/// 训练完成落库服务（W14 组明细写路径：§5.5⑦⑨ + §6.2 outbox/投影，
+/// 复用 core_db SyncOutboxWriter 与 DaySummaryProjection）。
+final workoutLogServiceProvider = Provider<WorkoutLogService>((ref) {
+  return WorkoutLogService(
+    database: ref.watch(appDatabaseProvider),
+    clock: ref.watch(hlcClockProvider),
+    projection: ref.watch(daySummaryProjectionProvider),
+  );
 });
 
 // ── W7-8 装配（§11.1：遥测 / raw_input 开关 / 计费 / 同步）────────────────

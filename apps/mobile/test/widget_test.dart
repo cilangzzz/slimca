@@ -158,6 +158,12 @@ void main() {
     expect(find.textContaining('还没有存钱目标'), findsOneWidget,
         reason: '§11.2 W13 仪表盘存钱卡空态=无目标引导创建');
 
+    // W14 训练中态卡（§11.2 W14 任务 4）：无进行中训练 → 不占位（§2.3
+    // 零等待空屏；有训练且当日才渲染，剩余休息秒 e2e 见
+    // plan_schedule_card_test.dart）。
+    expect(find.textContaining('训练中 · '), findsNothing,
+        reason: '§11.2 W14 无进行中训练 → 训练中态卡不占位');
+
     // ── W2：仅记钱手动记一笔（§11 W2 验收线）────────────────────────
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pumpAndSettle();
@@ -299,6 +305,12 @@ void main() {
         reason: '§11.2 W13 存钱卡空态=无目标引导创建');
     expect(find.text('新建目标'), findsOneWidget,
         reason: '§11.2 W13 存钱目标入口');
+    // W14 健身计划卡（§11.2 W14 任务 1「计划 Tab 接健身计划入口」）：空库
+    // 空态=排期空态 + 计划空态引导；排期卡/训练链路 e2e 见
+    // plan_schedule_card_test.dart。
+    expect(find.text('健身计划'), findsOneWidget);
+    expect(find.textContaining('还没有启用中的健身计划'), findsOneWidget,
+        reason: '§11.2 W14 健身计划卡空态=无启用计划引导');
     // 待办快速添加 → 当日流即时重发（§5.5⑩）。
     await tester.enterText(
       find.byKey(const Key('plan_todo_input')),
