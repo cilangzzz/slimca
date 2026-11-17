@@ -3,8 +3,10 @@ import 'dart:ui' show clampDouble;
 
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
+import 'package:feature_ledger/feature_ledger.dart' show LedgerBudgetItem;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:ui_kit/ui_kit.dart';
 
 import 'package:feature_capture/feature_capture.dart'
@@ -12,6 +14,7 @@ import 'package:feature_capture/feature_capture.dart'
 
 import '../../app/providers.dart';
 import '../../common/format.dart';
+import '../ledger/ledger_state.dart' show ledgerCategoryFilterProvider;
 import '../workout/workout_session_controller.dart'
     show workoutSessionProvider;
 import 'dashboard_state.dart';
@@ -248,7 +251,10 @@ class _CardWall extends ConsumerWidget {
         // 支出/运动两卡等高并排：本卡片墙位于 ListView（子项高度无界）内，
         // Row 直接 stretch 会拿到无限高度而布局崩溃，故 IntrinsicHeight 先取
         // 双卡固有高度作为有界约束（§3.2 卡片墙）。
-        SlimcaStaggerItem(index: 2, child: _SpendBurnRow(day: day)),
+        SlimcaStaggerItem(
+          index: 2,
+          child: _SpendBurnRow(day: day, date: date),
+        ),
         const SizedBox(height: 12),
         SlimcaStaggerItem(index: 3, child: _TodoCard(todos: todos)),
         const SizedBox(height: 12),
@@ -423,9 +429,12 @@ class _WorkoutCardState extends ConsumerState<_WorkoutCard> {
 
 /// 支出/运动双卡行：IntrinsicHeight 内 stretch，保证两卡等高（§3.2）。
 class _SpendBurnRow extends StatelessWidget {
-  const _SpendBurnRow({required this.day});
+  const _SpendBurnRow({required this.day, required this.date});
 
   final DashboardDay day;
+
+  /// 归属日 `yyyy-MM-dd`（§5.1；支出卡读当日预算快照用）。
+  final String date;
 
   @override
   Widget build(BuildContext context) {
@@ -433,7 +442,7 @@ class _SpendBurnRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(child: _SpendCard(day: day)),
+          Expanded(child: _SpendCard(day: day, date: date)),
           const SizedBox(width: 12),
           Expanded(child: _BurnCard(day: day)),
         ],
@@ -527,15 +536,54 @@ class _CalorieRingCard extends StatelessWidget {
   }
 }
 
-/// 今日支出卡：支出与预算余（§3.2 卡片墙第 2 项；暖橘=金额，§8.2）。
-class _SpendCard extends StatelessWidget {
-  const _SpendCard({required this.day});
+/// 今日支出卡（§3.2 卡片墙第 2 项；暖橘=金额，§8.2）。
+///
+/// W15 任务 2「支出卡接预算快照 v2」：
+/// - 数据=day_summary.budget_snapshot 直读（dashboardBudgetSnapshotProvider，
+///   §5.6⑬ 快照直出、零业务查询；写路径同事务重算→即时重发）；
+/// - 余/超支状态色已有语义 token：余=tokens.success、超支=tokens.danger
+///   （§3.2「超支/超额即时反馈」、§8.2 组件层禁裸色值）；
+/// - per-分类明细入口：分类预算行与「分类明细」跳账本 Tab 分类筛选
+///   （ledgerCategoryFilterProvider 预选 + go('/ledger')，§3.4 分类筛选）；
+/// - 未设预算 → 引导去 /ledger/budgets（§4.3）。
+class _SpendCard extends ConsumerWidget {
+  const _SpendCard({required this.day, required this.date});
 
   final DashboardDay day;
 
+  /// 归属日 `yyyy-MM-dd`（§5.1）。
+  final String date;
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tokens = context.slimca;
     final textTheme = Theme.of(context).textTheme;
+    final budgets =
+        ref.watch(dashboardBudgetSnapshotProvider(date)).value ??
+            const <LedgerBudgetItem>[];
+    final names =
+        ref.watch(categoryNamesProvider).value ?? const <String, String>{};
+
+    // money 账本总预算（§5.4⑥ category_id NULL=总预算；kcal 项归热量环；
+    // 周期限 daily——月度项随 v2 快照同入列表但不进「每日余量」行，§5.4⑥）。
+    LedgerBudgetItem? spendBudget;
+    for (final budget in budgets) {
+      if (!budget.isKcal && !budget.isMonthly && budget.categoryId == null) {
+        spendBudget = budget;
+        break;
+      }
+    }
+    final categoryBudgets = budgets
+        .where((budget) =>
+            !budget.isKcal && !budget.isMonthly && budget.categoryId != null)
+        .toList(growable: false);
+
+    // 跳账本 Tab 分类筛选（W15 per-分类明细入口；跨 Tab go 保分支栈）。
+    void openCategoryFilter(String? categoryId) {
+      ref.read(ledgerCategoryFilterProvider.notifier).select(categoryId);
+      GoRouter.of(context).go('/ledger');
+    }
+
     return _DashboardCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -544,15 +592,92 @@ class _SpendCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(yuanFromMinor(day.spendMinor), style: textTheme.headlineSmall),
           const SizedBox(height: 4),
-          Text(
-            '预算余 —（先去设置每日目标）',
-            style: textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+          if (spendBudget == null)
+            // 未设预算：引导去预算设置页（§4.3 /ledger/budgets）。
+            InkWell(
+              key: const Key('dashboard_budget_hint'),
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => GoRouter.of(context).push('/ledger/budgets'),
+              child: Text(
+                '预算余 —（点此去「预算设置」）',
+                style: textTheme.bodySmall?.copyWith(
+                  color: tokens.onSurfaceMuted,
+                ),
+              ),
+            )
+          else ...[
+            // 余/超支状态色（§3.2；remaining<0 = 超支标红）。
+            Text(
+              spendBudget.remaining >= 0
+                  ? '预算余 ${yuanFromMinor(spendBudget.remaining)}'
+                  : '超支 ${yuanFromMinor(-spendBudget.remaining)}',
+              key: const Key('dashboard_budget_state'),
+              style: textTheme.bodySmall?.copyWith(
+                color: spendBudget.remaining >= 0
+                    ? tokens.success
+                    : tokens.danger,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
+            // per-分类预算行（≤3 条，超支优先；点行跳该分类筛选）。
+            for (final budget in _prioritized(categoryBudgets))
+              InkWell(
+                key: Key('dashboard_budget_category_${budget.categoryId}'),
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => openCategoryFilter(budget.categoryId),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text(
+                    '${names[budget.categoryId] ?? "分类"} '
+                    '${budget.remaining >= 0
+                        ? "余 ${yuanFromMinor(budget.remaining)}"
+                        : "超支 ${yuanFromMinor(-budget.remaining)}"}',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: budget.remaining >= 0
+                          ? tokens.success
+                          : tokens.danger,
+                    ),
+                  ),
+                ),
+              ),
+            // 分类明细入口：跳账本 Tab 分类筛选条（§3.4）。
+            InkWell(
+              key: const Key('dashboard_spend_category_entry'),
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => openCategoryFilter(null),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '分类明细',
+                    style: textTheme.bodySmall?.copyWith(
+                      color: tokens.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 16,
+                    color: tokens.primary,
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  /// 分类预算行排序：超支在前、余升序（最紧的先露出；§3.2 卡片信息密度）。
+  List<LedgerBudgetItem> _prioritized(List<LedgerBudgetItem> budgets) {
+    final sorted = [...budgets]..sort((a, b) {
+      final aOver = a.remaining < 0;
+      final bOver = b.remaining < 0;
+      if (aOver != bOver) return aOver ? -1 : 1;
+      return a.remaining.compareTo(b.remaining);
+    });
+    return sorted.take(3).toList(growable: false);
   }
 }
 

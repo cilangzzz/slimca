@@ -111,8 +111,10 @@ Future<void> _pumpUntilFound(
 void main() {
   testWidgets('W2+W3-4 冒烟：仅记钱手动一笔 → AI 缺省装配解析确认 → 仪表盘即时更新',
       (WidgetTester tester) async {
-    // 放大视口：抽屉表单/确认卡一屏放下，免滚动命中（与 capture_flow 同口径）。
-    tester.view.physicalSize = const Size(900, 1800);
+    // 放大视口：抽屉表单/确认卡一屏放下，免滚动命中（与 capture_flow 同口径）；
+    // W15 起取 3600 高——预算设置页四区块（含 22 条内置分类行）单屏尽收，
+    // ListView(children:) 惰性构建下离屏区块不进树，断言需其在视口内。
+    tester.view.physicalSize = const Size(900, 3600);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
@@ -291,6 +293,46 @@ void main() {
     expect(find.text('测试晚餐 500kcal 花了18'), findsOneWidget);
     expect(find.textContaining('支出 ¥43.50'), findsWidgets,
         reason: '日头合计=两笔支出之和（25.50+18.00）');
+
+    // ── W15：账本 Tab 升级冒烟（§11.2 W15 任务 1：多账本切换器 + 报表/
+    //    预算入口，§4.3 路由 /stats 与 /ledger/budgets）─────────────────
+    expect(find.byKey(const Key('ledger_scope_switcher')), findsOneWidget,
+        reason: 'W15 顶栏多账本切换器（§3.4 账本切换抽屉下拉形态）');
+    expect(find.byKey(const Key('ledger_budget_entry')), findsOneWidget);
+    expect(find.byKey(const Key('ledger_category_manage_entry')),
+        findsOneWidget, reason: '分类管理入口（feature_ledger CategoryManagePage）');
+    // 报表页（§4.3 /stats）：push → 周/月/年三档骨架渲染 → 返回账本栈。
+    // 本用例已录 ¥43.50（当日两笔）→ 周档分类合计图例=¥43.50（页面本体=
+    // feature_ledger ReportPage，壳层只做 §10.4 装配）。
+    await tester.tap(find.byKey(const Key('ledger_stats_entry')));
+    await tester.pumpAndSettle();
+    expect(find.text('统计报表'), findsOneWidget);
+    expect(find.text('周'), findsOneWidget);
+    expect(find.text('月'), findsOneWidget);
+    expect(find.text('年'), findsOneWidget);
+    expect(find.text('钱-热量联动'), findsOneWidget,
+        reason: 'W15 双轴联动卡渲染（§3.4 钱-热量双轴）');
+    // 图例=per-分类合计（报表口径与账单流/事件拆行一致）：本用例两笔口径
+    // 不同——W2 手动一笔无分类（¥25.50=未分类）；W3-4 AI 确认卡一笔挂
+    // 「餐饮-正餐」（¥18.00）——图例两行而非合并 ¥43.50。
+    expect(find.text('未分类 ¥25.50'), findsOneWidget,
+        reason: '周档图例=W2 手动一笔（无分类行，报表与账单流口径一致）');
+    expect(find.text('餐饮-正餐 ¥18.00'), findsOneWidget,
+        reason: '周档图例=W3-4 AI 一笔（确认卡分类挂行）');
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(find.text('统计报表'), findsNothing, reason: '返回回账本 Tab');
+    // 预算设置页（§4.3 /ledger/budgets）：push → 三类表单渲染 → 返回。
+    await tester.tap(find.byKey(const Key('ledger_budget_entry')));
+    await tester.pumpAndSettle();
+    expect(find.text('预算设置'), findsOneWidget);
+    expect(find.text('每日总支出目标'), findsOneWidget);
+    expect(find.text('每日热量目标'), findsOneWidget);
+    expect(find.text('分类每日预算'), findsOneWidget);
+    expect(find.text('月度预算'), findsOneWidget,
+        reason: 'W15 月度周期表单（§5.4⑥ period_type=monthly）');
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
 
     // ── W5-6：计划 Tab 真页（§4.2 三卡 + §3.6 待办快速添加）──────────
     await tester.tap(find.text('计划'));

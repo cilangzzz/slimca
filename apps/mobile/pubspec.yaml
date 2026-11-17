@@ -63,6 +63,15 @@ dependencies:
   feature_plan:
     path: ../../packages/feature_plan
 
+  # W15 账本域装配（§11.2 W15「多账本+预算体系+统计报表」、§10.4「壳负责
+  # 装配」）：预算设置页每日/月度/分类目标写路径（LedgerAdminRepository →
+  # core_db BudgetsDao 收口 §5.4⑥/§5.6⑬）+ 分类管理页（CategoryManagePage）
+  # + 账本管理页（LedgerManagePage §5.4④）+ 统计报表页（ReportPage
+  # §3.4/§11.2）+ 预算快照 v2 解析（parseBudgetSnapshot）+ 分类色 token
+  # 解析（§8.2）。
+  feature_ledger:
+    path: ../../packages/feature_ledger
+
   # W2 接线直用依赖（core_db 的传递依赖提升为直接依赖，§10.1）：
   # drift——App 侧 reactive stream 直驱仪表盘（join/watch/事务，§10.1 数据层）；
   drift: ^2.29.0

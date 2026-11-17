@@ -101,6 +101,12 @@ Future<AppRuntime> bootstrap() async {
   final clock = HlcClock(deviceId: deviceId);
   await ensureDefaultLedgers(database, clock);
 
+  // ── W15 · day_summary 投影单例（§5.6⑬「业务行 + 投影同事务」的装配半边）：
+  // 录入写路径（captureGateway 内的 entries/entry_lines 仓库）注入同一投影
+  // 实例——记一笔后当日 budget_snapshot/savings_progress 同事务重算，仪表盘
+  // 支出卡预算余（W15 任务 2）与存钱进度卡读到的快照不再依赖旁路重算。
+  final projection = db.DaySummaryProjection(database);
+
   // ── W7-8 · 遥测（§3.9）：本地 JSONL 落盘；装配失败回落 Noop（缺失只损
   // 失监控数据、不影响业务，§6.1 纪律）。路径 = 应用 support 目录/telemetry。
   final telemetry = await _createTelemetryService();
@@ -189,9 +195,18 @@ Future<AppRuntime> bootstrap() async {
       // AppDatabase 与应用级 HLC 单例时钟；解析器为 W7-8 装饰链——遥测
       // 漏斗（§12 解析请求/成功/失败降级）→ raw_input 闸门（§3.7）→
       // dart-define 工厂桥接 core_ai 管线（缺省离线桩）。
+      // W15：注入 day_summary 投影（§5.6⑬「业务行 + 投影同事务」）——
+      // 记一笔后当日预算快照 v2 即时重算（W15 任务 2 支出卡数据面）。
       captureGatewayProvider.overrideWithValue(
-        createCaptureGateway(db: database, clock: clock),
+        createCaptureGateway(
+          db: database,
+          clock: clock,
+          projection: projection,
+        ),
       ),
+      // 投影单例与写路径共用（providers.dart 注释口径：仪表盘/存钱卡快照
+      // 直出与写路径同事务联动共用同一实例）。
+      daySummaryProjectionProvider.overrideWithValue(projection),
       // W14 计划域装配（§10.4「壳负责装配」）：feature_plan 网关绑定同一
       // AppDatabase 与应用级 HLC 单例时钟（模板建档/编辑/开练/组明细写路径
       // 经 PlanGateway——与壳层排期卡/训练中态卡共读同一批真值表，§5.5⑧⑨）。

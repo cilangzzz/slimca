@@ -1,10 +1,13 @@
-/// 分类管理页（§11.1 W5-6「分类管理」）：
+/// 分类管理页（§11.1 W5-6「分类管理」；§11.2 W15 预算体系）：
 /// - 每日目标：每日总支出/总热量/分类级目标，落库 budgets(period=daily)，
 ///   §5.4⑥、§3.4；
+/// - 月度目标：月度总支出（周期起点/结转开关），落库 budgets(period=
+///   monthly)，§5.4⑥ P1/W15；
 /// - 分类增删改：categories 表逻辑引用（不建外键，§5.4⑤/§6.2），
 ///   内置分类不可删（§5.4⑤ is_preset），自定义分类软删墓碑（§5.1）。
 ///
-/// 写入经 [LedgerAdminRepository]（LocalWriteClock 发号，§6.2/§6.3）。
+/// 写入经 [LedgerAdminRepository]（W15 起预算路径收口 core_db BudgetsDao：
+/// outbox 同事务入队 + budget_snapshot v2 联动，§6.2/§5.6⑬）。
 library;
 
 import 'package:flutter/material.dart';
@@ -20,6 +23,18 @@ const Key ledgerSpendGoalSetKey = ValueKey<String>('ledger_spend_goal_set');
 
 /// 每日热量目标「设置/修改」按钮锚点。
 const Key ledgerKcalGoalSetKey = ValueKey<String>('ledger_kcal_goal_set');
+
+/// 月度支出目标「设置/修改」按钮锚点（W15 预算体系，§5.4⑥ monthly）。
+const Key ledgerMonthGoalSetKey = ValueKey<String>('ledger_month_goal_set');
+
+/// 月度目标输入框锚点。
+const Key ledgerMonthGoalInputKey = ValueKey<String>('ledger_month_goal_input');
+
+/// 月度目标结转开关锚点。
+const Key ledgerMonthGoalCarryKey = ValueKey<String>('ledger_month_goal_carry');
+
+/// 月度目标保存按钮锚点。
+const Key ledgerMonthGoalSaveKey = ValueKey<String>('ledger_month_goal_save');
 
 /// 目标输入框锚点（金额/热量对话框共用）。
 const Key ledgerGoalInputKey = ValueKey<String>('ledger_goal_input');
@@ -89,7 +104,8 @@ class CategoryManagePage extends StatelessWidget {
   }
 }
 
-/// 每日目标卡（§3.4/§5.4⑥）：总支出、总热量 + 分类级目标清单。
+/// 每日目标卡（§3.4/§5.4⑥）：总支出、总热量 + 分类级目标清单；
+/// W15 增月度总支出目标（period=monthly，周期起点/结转）。
 class _DailyGoalCard extends StatelessWidget {
   const _DailyGoalCard({required this.repository, required this.budgets});
 
@@ -131,13 +147,42 @@ class _DailyGoalCard extends StatelessWidget {
     );
   }
 
+  /// 月度支出目标对话框（W15，§5.4⑥ monthly：金额 + 周期起点 + 结转开关）。
+  void _showMonthlyGoalDialog(
+    BuildContext context,
+    LedgerDailyBudget? current,
+  ) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => _MonthlyGoalDialog(
+        title: current == null ? '设置月度支出目标' : '修改月度支出目标',
+        initialText:
+            current == null ? null : LedgerFormat.yuanInputText(current.amount),
+        initialStart: current?.dayOfMonthStart ?? 1,
+        initialCarryOver: current?.carryOver ?? false,
+        onSave: (int minor, int dayOfMonthStart, bool carryOver) =>
+            repository.setMonthlySpendGoal(
+          minor,
+          dayOfMonthStart: dayOfMonthStart,
+          carryOver: carryOver,
+        ),
+        onClear: current == null ? null : repository.clearMonthlySpendGoal,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final SlimcaTheme tokens = context.slimca;
     LedgerDailyBudget? spendGoal;
     LedgerDailyBudget? kcalGoal;
+    LedgerDailyBudget? monthGoal;
     final List<LedgerDailyBudget> categoryGoals = <LedgerDailyBudget>[];
     for (final LedgerDailyBudget budget in budgets) {
+      if (budget.isMonthly) {
+        monthGoal ??= budget;
+        continue;
+      }
       if (budget.isCategoryGoal) {
         categoryGoals.add(budget);
       } else if (budget.isKcalGoal) {
@@ -221,6 +266,26 @@ class _DailyGoalCard extends StatelessWidget {
                 ],
               ),
             ),
+          const SizedBox(height: 12),
+          Text(
+            '月度目标（§5.4⑥ monthly，W15）',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: tokens.onSurface,
+                ),
+          ),
+          const SizedBox(height: 4),
+          _GoalTile(
+            buttonKey: ledgerMonthGoalSetKey,
+            label: '月度支出目标',
+            value: monthGoal == null
+                ? '未设置'
+                : '${LedgerFormat.moneyMinor(monthGoal.amount)}'
+                    '（每月${monthGoal.dayOfMonthStart}日起'
+                    '${monthGoal.carryOver ? ' · 结转' : ''}）',
+            isSet: monthGoal != null,
+            onSet: () => _showMonthlyGoalDialog(context, monthGoal),
+          ),
         ],
       ),
     );
@@ -374,6 +439,166 @@ class _GoalDialogState extends State<_GoalDialog> {
         ),
         FilledButton(
           key: ledgerGoalSaveKey,
+          onPressed: _saving ? null : _save,
+          child: const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+/// 月度目标对话框（W15，§5.4⑥ monthly）：金额 + 周期起点（1..28）+
+/// 结转开关；清除 = 软删墓碑（§5.1）。
+class _MonthlyGoalDialog extends StatefulWidget {
+  const _MonthlyGoalDialog({
+    required this.title,
+    required this.initialText,
+    required this.initialStart,
+    required this.initialCarryOver,
+    required this.onSave,
+    this.onClear,
+  });
+
+  final String title;
+  final String? initialText;
+  final int initialStart;
+  final bool initialCarryOver;
+  final Future<void> Function(int amountMinor, int dayOfMonthStart,
+      bool carryOver) onSave;
+  final Future<void> Function()? onClear;
+
+  @override
+  State<_MonthlyGoalDialog> createState() => _MonthlyGoalDialogState();
+}
+
+class _MonthlyGoalDialogState extends State<_MonthlyGoalDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initialText ?? '');
+  late int _start = widget.initialStart;
+  late bool _carryOver = widget.initialCarryOver;
+  String? _errorText;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final int? amountMinor = LedgerFormat.parseYuanToMinor(_controller.text);
+    if (amountMinor == null) {
+      setState(() {
+        _errorText = '请输入金额（元，最多两位小数）';
+      });
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _errorText = null;
+    });
+    await widget.onSave(amountMinor, _start, _carryOver);
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> _clear() async {
+    final Future<void> Function()? onClear = widget.onClear;
+    if (onClear == null) {
+      return;
+    }
+    setState(() {
+      _saving = true;
+    });
+    await onClear();
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final SlimcaTheme tokens = context.slimca;
+    return AlertDialog(
+      title: Text(widget.title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          TextField(
+            key: ledgerMonthGoalInputKey,
+            controller: _controller,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              hintText: '如 2000（元/月）',
+              errorText: _errorText,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '周期起点（每月几号，1-28，§5.4⑥）',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: tokens.onSurfaceMuted,
+                ),
+          ),
+          const SizedBox(height: 4),
+          SizedBox(
+            height: 40,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: <Widget>[
+                for (final int day in <int>[1, 10, 15, 20, 25, 28])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text('$day日'),
+                      selected: _start == day,
+                      onSelected: (bool selected) {
+                        if (selected) {
+                          setState(() {
+                            _start = day;
+                          });
+                        }
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            key: ledgerMonthGoalCarryKey,
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            title: Text(
+              '结转未用完的额度',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: tokens.onSurface,
+                  ),
+            ),
+            value: _carryOver,
+            onChanged: (bool value) {
+              setState(() {
+                _carryOver = value;
+              });
+            },
+          ),
+        ],
+      ),
+      actions: <Widget>[
+        if (widget.onClear != null)
+          TextButton(
+            onPressed: _saving ? null : _clear,
+            child: const Text('清除目标'),
+          ),
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: ledgerMonthGoalSaveKey,
           onPressed: _saving ? null : _save,
           child: const Text('保存'),
         ),

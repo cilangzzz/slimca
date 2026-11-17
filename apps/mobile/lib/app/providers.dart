@@ -20,6 +20,15 @@ library;
 
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
+import 'package:feature_ledger/feature_ledger.dart'
+    show
+        DriftLedgerAdminRepository,
+        DriftLedgerManageRepository,
+        DriftReportRepository,
+        LedgerAdminRepository,
+        LedgerCategoryOption,
+        LedgerManageRepository,
+        ReportRepository;
 import 'package:feature_sync/feature_sync.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -134,6 +143,44 @@ final savingsServiceProvider = Provider<SavingsService>((ref) {
 /// 禁真实通知/平台通道）。
 final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
   return FlutterLocalReminderScheduler();
+});
+
+// ── W15 装配（§11.2 W15：多账本+预算体系+统计报表）────────────────────
+
+/// 账本管理仓库 provider（feature_ledger 抽象 §10.4 分层纪律）：分类管理页、
+/// 每日目标（budgets period=daily §5.4⑥）与分类筛选条共用。
+final ledgerAdminRepositoryProvider = Provider<LedgerAdminRepository>((ref) {
+  return DriftLedgerAdminRepository(ref.watch(appDatabaseProvider));
+});
+
+/// 分类选项流（§5.4⑤；筛选条/预算设置页的分类清单共用）。
+final ledgerCategoryOptionsProvider =
+    StreamProvider<List<LedgerCategoryOption>>((ref) {
+  return ref.watch(ledgerAdminRepositoryProvider).watchCategoryOptions();
+});
+
+/// 现行每日目标流（budgets period=daily 且未删，§5.4⑥；预算设置页数据源）。
+final ledgerDailyBudgetsProvider = StreamProvider((ref) {
+  return ref.watch(ledgerAdminRepositoryProvider).watchDailyBudgets();
+});
+
+/// 现行月度预算流（budgets period=monthly，§5.4⑥ P1；W15 预算设置页；
+/// W15 收口：feature_ledger admin 仓库 → core_db BudgetsDao 写路径）。
+final monthlyBudgetsProvider = StreamProvider((ref) {
+  return ref.watch(ledgerAdminRepositoryProvider).watchMonthlyBudgets();
+});
+
+/// 报表仓库 provider（W15 统计报表：feature_ledger `ReportRepository`，
+/// day_summary 直读 + entry_lines 兜底，§5.6⑬；/stats 页装配）。
+final reportRepositoryProvider = Provider<ReportRepository>((ref) {
+  return DriftReportRepository(ref.watch(appDatabaseProvider));
+});
+
+/// 账本管理仓库 provider（W15 多账本生命周期：feature_ledger
+/// `LedgerManageRepository`——建档/重命名/归档/设默认，写路径委托 core_db
+/// LedgerDao §5.4④；账本管理页装配）。
+final ledgerManageRepositoryProvider = Provider<LedgerManageRepository>((ref) {
+  return DriftLedgerManageRepository(ref.watch(appDatabaseProvider));
 });
 
 // ── W14 装配（§11.2 W14：健身计划/组间计时器/漏斗）────────────────────

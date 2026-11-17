@@ -1,7 +1,13 @@
-/// 账本 Tab 页（§4.2「账本」/§11.1 W5-6）：
-/// 日简报卡 → 月份切换条 → 分类筛选条 → 月度分类汇总 → 按日分组账单流。
+/// 账本 Tab 页（§4.2「账本」/§11.1 W5-6；§11.2 W15 多账本+统计入口）：
+/// 日简报卡 → 账本筛选条 → 月份切换条 → 分类筛选条 → 月度分类汇总 →
+/// 按日分组账单流。
 ///
 /// - 数据全部响应式（watch 流直驱，§3.2 零业务查询直读本表）；
+/// - 多账本（§11.2 W15、§3.4 P1）：账本筛选条（「全部」+ 可用账本，过滤
+///   集合互斥）与账本管理入口（[LedgerManagePage]：建账本/重命名/归档/
+///   切换默认）；录入侧 ledgerId 由 capture 网关承接（非本包范围）；
+/// - 统计入口（§4.2「统计入口」）：AppBar 图标 push [ReportPage]
+///   （周/月/年 + 钱-热量双轴联动，§3.4）；
 /// - 编辑入口：账单条目点按回调 [LedgerPage.onEditEntry]，由壳接线到
 ///   既有 correction supersede 链（§3.3 金额不可变：修改=新增行 supersede
 ///   旧行；壳侧 `showCaptureSheet(seed: CaptureSeed(editEntryId:))`）；
@@ -18,10 +24,14 @@ import '../ledger_admin_repository.dart';
 import '../ledger_calendar.dart';
 import '../ledger_colors.dart';
 import '../ledger_format.dart';
+import '../ledger_manage_repository.dart';
 import '../ledger_models.dart';
 import '../ledger_repository.dart';
+import '../report_repository.dart';
 import 'category_manage_page.dart';
 import 'ledger_brief_card.dart';
+import 'ledger_manage_page.dart';
+import 'report_page.dart';
 
 /// 账本页（构造注入仓库，与 feature_dashboard 同款装配，§10.4）。
 class LedgerPage extends StatefulWidget {
@@ -29,10 +39,14 @@ class LedgerPage extends StatefulWidget {
     super.key,
     required this.repository,
     this.adminRepository,
+    this.manageRepository,
+    this.reportRepository,
     this.initialMonth,
     this.briefingDate,
     this.onEditEntry,
     this.onOpenCategoryManage,
+    this.onOpenLedgerManage,
+    this.onOpenReport,
     this.onStartCapture,
   });
 
@@ -42,6 +56,13 @@ class LedgerPage extends StatefulWidget {
   /// 分类管理仓库；与 [onOpenCategoryManage] 二者至少其一非空才会显示
   /// 分类管理入口。
   final LedgerAdminRepository? adminRepository;
+
+  /// 账本管理仓库（§11.2 W15 多账本）：非空时显示账本筛选条与管理入口。
+  final LedgerManageRepository? manageRepository;
+
+  /// 报表仓库（§3.4 统计报表）：非空时显示统计入口（或经
+  /// [onOpenReport] 由宿主接管转场）。
+  final ReportRepository? reportRepository;
 
   /// 初始选中月（任意时刻，归位到所在月 1 号）；缺省=今天所在月。
   final DateTime? initialMonth;
@@ -56,6 +77,14 @@ class LedgerPage extends StatefulWidget {
   /// [CategoryManagePage]。
   final VoidCallback? onOpenCategoryManage;
 
+  /// 覆写账本管理导航（宿主注入自定义转场，§9.5）；缺省 push
+  /// [LedgerManagePage]。
+  final VoidCallback? onOpenLedgerManage;
+
+  /// 覆写统计报表导航（宿主注入自定义转场，§9.5）；缺省 push
+  /// [ReportPage]（需 [reportRepository] 同非空）。
+  final VoidCallback? onOpenReport;
+
   /// 空态「立即记录」回调（壳接线录入抽屉）。
   final VoidCallback? onStartCapture;
 
@@ -69,8 +98,17 @@ class _LedgerPageState extends State<LedgerPage> {
   );
   String? _filterCategoryId;
 
+  /// 多账本筛选（§11.2 W15）：null=全部账本；集合互斥（行级 ledger_id）。
+  String? _filterLedgerId;
+
   bool get _canOpenCategories =>
       widget.onOpenCategoryManage != null || widget.adminRepository != null;
+
+  bool get _canOpenManage =>
+      widget.onOpenLedgerManage != null || widget.manageRepository != null;
+
+  bool get _canOpenReport =>
+      widget.onOpenReport != null || widget.reportRepository != null;
 
   void _shiftMonth(int delta) {
     setState(() {
@@ -95,6 +133,40 @@ class _LedgerPageState extends State<LedgerPage> {
     );
   }
 
+  void _openLedgerManage() {
+    final VoidCallback? callback = widget.onOpenLedgerManage;
+    if (callback != null) {
+      callback();
+      return;
+    }
+    final LedgerManageRepository? manage = widget.manageRepository;
+    if (manage == null) {
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => LedgerManagePage(repository: manage),
+      ),
+    );
+  }
+
+  void _openReport() {
+    final VoidCallback? callback = widget.onOpenReport;
+    if (callback != null) {
+      callback();
+      return;
+    }
+    final ReportRepository? report = widget.reportRepository;
+    if (report == null) {
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ReportPage(repository: report),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final SlimcaTheme tokens = context.slimca;
@@ -108,6 +180,20 @@ class _LedgerPageState extends State<LedgerPage> {
         backgroundColor: tokens.surface,
         title: const Text('账本'),
         actions: <Widget>[
+          if (_canOpenReport)
+            IconButton(
+              key: const ValueKey<String>('ledger_page_report'),
+              icon: const Icon(Icons.donut_small_outlined),
+              tooltip: '统计报表',
+              onPressed: _openReport,
+            ),
+          if (_canOpenManage)
+            IconButton(
+              key: const ValueKey<String>('ledger_page_ledger_manage'),
+              icon: const Icon(Icons.account_balance_wallet_outlined),
+              tooltip: '账本管理',
+              onPressed: _openLedgerManage,
+            ),
           if (_canOpenCategories)
             IconButton(
               icon: const Icon(Icons.category_outlined),
@@ -126,14 +212,29 @@ class _LedgerPageState extends State<LedgerPage> {
               date: briefingDate,
             ),
           ),
-          const SizedBox(height: 12),
+          if (widget.manageRepository != null) ...<Widget>[
+            const SizedBox(height: 8),
+            SlimcaStaggerItem(
+              index: 1,
+              child: _LedgerFilterBar(
+                repository: widget.manageRepository!,
+                selectedLedgerId: _filterLedgerId,
+                onSelect: (String? ledgerId) {
+                  setState(() {
+                    _filterLedgerId = ledgerId;
+                  });
+                },
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
           SlimcaStaggerItem(
-            index: 1,
+            index: 2,
             child: _MonthBar(month: _month, onShift: _shiftMonth),
           ),
           const SizedBox(height: 8),
           SlimcaStaggerItem(
-            index: 2,
+            index: 3,
             child: _CategoryFilterBar(
               repository: widget.repository,
               selectedCategoryId: _filterCategoryId,
@@ -146,10 +247,11 @@ class _LedgerPageState extends State<LedgerPage> {
           ),
           const SizedBox(height: 12),
           SlimcaStaggerItem(
-            index: 3,
+            index: 4,
             child: _CategorySummaryCard(
               repository: widget.repository,
               month: monthPrefix,
+              ledgerId: _filterLedgerId,
             ),
           ),
           const SizedBox(height: 12),
@@ -157,11 +259,62 @@ class _LedgerPageState extends State<LedgerPage> {
             repository: widget.repository,
             month: monthPrefix,
             categoryId: _filterCategoryId,
+            ledgerId: _filterLedgerId,
             onEditEntry: widget.onEditEntry,
             onStartCapture: widget.onStartCapture,
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 账本筛选条（§11.2 W15 多账本）：「全部」+ 可用账本；单选，选中态
+/// primary 反色。过滤集合互斥（行级 ledger_id，§5.2②）。
+class _LedgerFilterBar extends StatelessWidget {
+  const _LedgerFilterBar({
+    required this.repository,
+    required this.selectedLedgerId,
+    required this.onSelect,
+  });
+
+  final LedgerManageRepository repository;
+  final String? selectedLedgerId;
+  final void Function(String? ledgerId) onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<LedgerSwitchOption>>(
+      stream: repository.watchSwitchOptions(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<List<LedgerSwitchOption>> snapshot,
+      ) {
+        final List<LedgerSwitchOption> options =
+            snapshot.data ?? const <LedgerSwitchOption>[];
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: <Widget>[
+              _FilterChip(
+                key: const ValueKey<String>('ledger_filter_ledger_all'),
+                label: '全部账本',
+                selected: selectedLedgerId == null,
+                onTap: () => onSelect(null),
+              ),
+              for (final LedgerSwitchOption option in options)
+                _FilterChip(
+                  key: ValueKey<String>('ledger_filter_ledger_${option.id}'),
+                  label: option.isKcalLedger
+                      ? '${option.name} ·热量'
+                      : option.name,
+                  selected: selectedLedgerId == option.id,
+                  onTap: () => onSelect(option.id),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -301,12 +454,19 @@ class _FilterChip extends StatelessWidget {
 }
 
 /// 月度分类汇总卡（§3.4 统计雏形：per-category money 行求和，支出降序；
-/// 收入类以 `+` 前缀标 moneyIn 色）。
+/// 收入类以 `+` 前缀标 moneyIn 色；W15 多账本：ledgerId 过滤）。
 class _CategorySummaryCard extends StatelessWidget {
-  const _CategorySummaryCard({required this.repository, required this.month});
+  const _CategorySummaryCard({
+    required this.repository,
+    required this.month,
+    this.ledgerId,
+  });
 
   final LedgerRepository repository;
   final String month;
+
+  /// 多账本过滤（§11.2 W15）：null=全部账本。
+  final String? ledgerId;
 
   @override
   Widget build(BuildContext context) {
@@ -320,7 +480,7 @@ class _CategorySummaryCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
       ),
       child: StreamBuilder<List<LedgerCategorySum>>(
-        stream: repository.watchMonthCategorySums(month),
+        stream: repository.watchMonthCategorySums(month, ledgerId: ledgerId),
         builder: (
           BuildContext context,
           AsyncSnapshot<List<LedgerCategorySum>> snapshot,
@@ -424,11 +584,13 @@ class _SummaryRow extends StatelessWidget {
 }
 
 /// 按日分组账单流（§3.4）：日期降序分节，节头带当日合计；空月出引导态。
+/// W15 多账本：ledgerId 过滤（§11.2）。
 class _BillList extends StatelessWidget {
   const _BillList({
     required this.repository,
     required this.month,
     required this.categoryId,
+    required this.ledgerId,
     required this.onEditEntry,
     required this.onStartCapture,
   });
@@ -436,13 +598,20 @@ class _BillList extends StatelessWidget {
   final LedgerRepository repository;
   final String month;
   final String? categoryId;
+
+  /// 多账本过滤（§11.2 W15）：null=全部账本。
+  final String? ledgerId;
   final void Function(String entryId)? onEditEntry;
   final VoidCallback? onStartCapture;
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<LedgerDayGroup>>(
-      stream: repository.watchMonthBillGroups(month, categoryId: categoryId),
+      stream: repository.watchMonthBillGroups(
+        month,
+        categoryId: categoryId,
+        ledgerId: ledgerId,
+      ),
       builder: (
         BuildContext context,
         AsyncSnapshot<List<LedgerDayGroup>> snapshot,

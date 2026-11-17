@@ -221,8 +221,12 @@ void main() {
         expect(summary.savingsProgress, isNull,
             reason: '§5.6⑬ W13 实装：本场景无当日有效目标 → 快照保持 NULL'
                 '（专项对账见 savings_projection_test）');
-        expect(jsonDecode(summary.budgetSnapshot), {'daily': []},
-            reason: '未建预算时快照为空集（§5.6⑬ budget_snapshot）');
+        expect(jsonDecode(summary.budgetSnapshot), <String, Object?>{
+          'v': 2,
+          'daily': <Object?>[],
+          'monthly': <Object?>[],
+        }, reason: '未建预算时快照为 v2 空集（§5.6⑬ budget_snapshot，W15 v2 '
+            'daily 项键形向后兼容 v1）');
         expect(summary.tzOffsetMin, 480, reason: '§5.1：取当日事件行时区');
       }
 

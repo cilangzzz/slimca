@@ -115,6 +115,8 @@ class LedgerDayBriefingCard extends StatelessWidget {
                 )
               else
                 // 分类名经 options 流回填（快照只带 category_id，§5.6⑬）。
+                // W15：日简报卡只渲染 daily 周期预算（月度预算属「月度目标」
+                // 口径，§5.4⑥ 周期语义，不混入每日目标行）。
                 StreamBuilder<List<LedgerCategoryOption>>(
                   stream: repository.watchCategoryOptions(),
                   builder: (
@@ -126,10 +128,15 @@ class LedgerDayBriefingCard extends StatelessWidget {
                           in catSnapshot.data ?? const <LedgerCategoryOption>[])
                         option.id: option.name,
                     };
+                    final List<LedgerBudgetItem> dailyBudgets = summary
+                        .budgets
+                        .where((LedgerBudgetItem item) =>
+                            item.periodType == kBudgetPeriodDaily)
+                        .toList();
                     return Column(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        for (final LedgerBudgetItem item in summary.budgets)
+                        for (final LedgerBudgetItem item in dailyBudgets)
                           _BudgetLine(item: item, namesById: namesById),
                       ],
                     );

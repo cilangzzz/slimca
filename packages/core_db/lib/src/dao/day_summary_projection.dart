@@ -1,4 +1,4 @@
-/// day_summary 投影 v1（§5.6⑬「当日聚合投影」）。
+/// day_summary 投影（§5.6⑬「当日聚合投影」）。
 ///
 /// 派生量永不存储到同步表、永不同步（§5.1/§6.1 原则 3）；双端从明细行各自
 /// 重建、永远自愈（§6.5 冲突矩阵末行）。重建规则（§5.6）：任何 entry_line /
@@ -13,9 +13,12 @@
 /// - net_kcal = kcal_in - kcal_out（§3.5 摄入-消耗）；
 /// - todo_done / todo_total：todos.date 当日且未软删，done_at 非空计完成；
 ///   收集箱（date=NULL，§5.5⑩）不计入任何日投影；
-/// - budget_snapshot：daily 预算（period_type='daily'，§5.4⑥）余量快照，
-///   money 账本 used=当日支出、kcal 账本 used=kcal_in-kcal_out（§5.4 kcal
-///   账本「预算=收入、吃=支出、运动=再入账」口径）；
+/// - budget_snapshot：**v2 形状（W15，§11.2 W15「预算体系+统计报表」）**——
+///   daily 预算（period_type='daily'）+ monthly 预算（period_type='monthly'，
+///   §5.4⑥ 月度周期起点/结转开关）双周期余量快照，daily 项形状与 W2 的 v1
+///   逐键一致（向后兼容，迁移注记见 [_budgetSnapshot]）；money 账本 used=
+///   窗口内支出、kcal 账本 used=kcal_in-kcal_out（§5.4 kcal 账本「预算=收入、
+///   吃=支出、运动=再入账」口径）；
 /// - savings_progress：W13 实装（§11.2 W13、§5.6⑬）——「当日有效目标」
 ///   （status='active'、未墓碑、started_on <= 当日，且 deadline 为空或
 ///   deadline >= 当日）逐一写 `{goal_id: {contributed_minor, target_minor}}`
@@ -118,6 +121,22 @@ class DaySummaryProjection {
       'UPDATE day_summaries SET dirty = 1 '
       'WHERE savings_progress IS NOT NULL AND date >= ?',
       variables: [Variable.withString(fromDate)],
+      updates: {_db.daySummaries},
+    );
+  }
+
+  /// 预算快照联动标记（W15 v2，§5.6⑬/§11.2 W15「预算体系」）：将**全部**
+  /// 投影行标记 dirty，交 recomputeDirtyDays 后台自愈。
+  ///
+  /// 范围取全量的原因：daily 预算影响每一日的快照；monthly 预算的周期窗口
+  /// 可覆盖历史任意区间（day_of_month_start 自定义，§5.4⑥）。预算行数量少、
+  /// 变更频次低，全量重算可接受，且与「可随时全量重建（自愈）」（§5.6）同构。
+  ///
+  /// 注意：与 [markSavingsProgressDirty] 不同——budget_snapshot 恒非 NULL
+  /// （无预算=v2 空集），无法用「非空行」缩小扫描范围。
+  Future<void> markBudgetSnapshotDirty() async {
+    await _db.customUpdate(
+      'UPDATE day_summaries SET dirty = 1',
       updates: {_db.daySummaries},
     );
   }
@@ -276,70 +295,35 @@ class DaySummaryProjection {
     return existing?.tzOffsetMin ?? 0;
   }
 
-  /// 预算余量快照（§5.4⑥ budgets + §5.6⑬ budget_snapshot）。
+  /// 预算余量快照（§5.4⑥ budgets + §5.6⑬ budget_snapshot）——**v2**。
   ///
-  /// v1 只展开 daily 预算：money 账本 used=当日该账本（或账本+分类）支出；
-  /// kcal 账本 used=该账本当日 kcal_in-kcal_out（吃=支出、运动=再入账，
-  /// §5.4 kcal 账本行）。月度预算（period_type='monthly'，P1）不进日快照。
+  /// 形状（W15，§11.2 W15「预算体系」）：
+  /// `{"v":2,"daily":[{ledger_id,category_id,amount,used,remaining}],
+  ///   "monthly":[{ledger_id,category_id,amount,used,remaining,carry_over,
+  ///               period_start,period_end}]}`。
+  ///
+  /// 迁移注记（§6.4 兼容口径）：
+  /// - budget_snapshot 为本地投影派生列、永不同步（§5.6⑬），无 schema 迁移；
+  ///   旧 v1 行（无 'v' 键、daily 项同键形）在下次重算时整行升级为 v2——
+  ///   投影自愈语义（§5.6「可随时全量重建」）；
+  /// - **向后兼容**：daily 项键形与 W2 的 v1 完全一致，v1 读取端按 'daily'
+  ///   键直读不受影响（'v'/'monthly' 是旧解析器看不见的多余键）；
+  /// - 读取端必须三形态兼容：v1 daily / v2 daily+monthly / feature_dashboard
+  ///   v1 平铺（`{"kcal_budget":…,"spend_budget_minor":…}`）——参考实现
+  ///   feature_ledger.parseBudgetSnapshot；
+  /// - 已知边界：feature_dashboard 的投影重算路径（非 core_db）仍以 v1 平铺
+  ///   形态覆写快照——集成时该路径应改走 core_db 投影或 v2 编码（W15 集成
+  ///   披露项，不影响读取端兼容）。
+  ///
+  /// 口径：
+  /// - daily 项：used=当日该账本（或账本+分类）money 支出；kcal 账本 used=
+  ///   当日 kcal_in-kcal_out（§5.4 kcal 账本「吃=支出、运动=再入账」）；
+  /// - monthly 项：周期窗口 [period_start, period_end) 由 day_of_month_start
+  ///   折算为**包含 [date]** 的周期；used=窗口内同口径聚合；
+  /// - carry_over=true（§5.4⑥ 结转）：amount 追加「上一周期 remaining 的
+  ///   非负部分」——**单步结转**（跨多期滚动结转留待后续深化；上一周期
+  ///   remaining=上一周期 amount-上一周期 used，不级联历史结转）。
   Future<Map<String, Object?>> _budgetSnapshot(String date) async {
-    // 当日 money 支出按 (ledger_id, category_id) 分组。
-    final spendRows = await _db
-        .customSelect(
-          'SELECT l.ledger_id AS ledger_id, l.category_id AS category_id, '
-          'COALESCE(SUM(l.amount), 0) AS total '
-          'FROM entry_lines l INNER JOIN entries e ON e.id = l.entry_id '
-          "WHERE e.date = ? AND l.type = 'money' AND l.direction = 'out' "
-          "AND l.status = 'active' AND l.deleted_at IS NULL "
-          'AND e.deleted_at IS NULL GROUP BY l.ledger_id, l.category_id',
-          variables: [Variable.withString(date)],
-        )
-        .get();
-    // 当日 kcal 按 ledger 分组（calorie=摄入、burn=再入账）。
-    final kcalRows = await _db
-        .customSelect(
-          'SELECT l.ledger_id AS ledger_id, '
-          "COALESCE(SUM(CASE WHEN l.type = 'calorie' AND l.direction = 'in' "
-          'THEN l.amount ELSE 0 END), 0) AS kcal_in, '
-          "COALESCE(SUM(CASE WHEN l.type = 'burn' AND l.direction = 'out' "
-          'THEN l.amount ELSE 0 END), 0) AS kcal_out '
-          'FROM entry_lines l INNER JOIN entries e ON e.id = l.entry_id '
-          "WHERE e.date = ? AND l.type IN ('calorie', 'burn') "
-          "AND l.status = 'active' AND l.deleted_at IS NULL "
-          'AND e.deleted_at IS NULL GROUP BY l.ledger_id',
-          variables: [Variable.withString(date)],
-        )
-        .get();
-
-    final spendByLedgerCat = <String, int>{};
-    final spendByLedger = <String, int>{};
-    for (final row in spendRows) {
-      // money 行 ledger_id 必填（§5.2②）；NULL 组防御性跳过（无归属不进预算）。
-      final ledgerId = row.readNullable<String>('ledger_id');
-      if (ledgerId == null) {
-        continue;
-      }
-      final categoryId = row.readNullable<String>('category_id');
-      final total = row.read<int>('total');
-      if (categoryId == null) {
-        spendByLedger[ledgerId] = (spendByLedger[ledgerId] ?? 0) + total;
-      } else {
-        final key = '$ledgerId|$categoryId';
-        spendByLedgerCat[key] = (spendByLedgerCat[key] ?? 0) + total;
-        spendByLedger[ledgerId] = (spendByLedger[ledgerId] ?? 0) + total;
-      }
-    }
-    final kcalInByLedger = <String, int>{};
-    final kcalOutByLedger = <String, int>{};
-    for (final row in kcalRows) {
-      // kcal 行归集到内置 kcal 账本（§5.2②）；未挂账本的组不进预算口径。
-      final ledgerId = row.readNullable<String>('ledger_id');
-      if (ledgerId == null) {
-        continue;
-      }
-      kcalInByLedger[ledgerId] = row.read<int>('kcal_in');
-      kcalOutByLedger[ledgerId] = row.read<int>('kcal_out');
-    }
-
     final kindOf = <String, String>{};
     final ledgers = await (_db.select(_db.ledgers)
           ..where((t) => t.deletedAt.isNull()))
@@ -349,22 +333,23 @@ class DaySummaryProjection {
     }
 
     final budgets = await (_db.select(_db.budgets)
-          ..where((t) =>
-              t.periodType.equals('daily') & t.deletedAt.isNull()))
+          ..where((t) => t.deletedAt.isNull()))
         .get();
-    final items = <Map<String, Object?>>[];
-    for (final budget in budgets) {
-      final int used;
-      if (kindOf[budget.ledgerId] == 'kcal') {
-        // kcal 预算：吃=支出、运动=再入账（§5.4 kcal 账本行口径）。
-        used = (kcalInByLedger[budget.ledgerId] ?? 0) -
-            (kcalOutByLedger[budget.ledgerId] ?? 0);
-      } else if (budget.categoryId == null) {
-        used = spendByLedger[budget.ledgerId] ?? 0;
-      } else {
-        used = spendByLedgerCat['${budget.ledgerId}|${budget.categoryId}'] ?? 0;
-      }
-      items.add(<String, Object?>{
+    final dailyBudgets =
+        budgets.where((b) => b.periodType == 'daily').toList();
+    final monthlyBudgets =
+        budgets.where((b) => b.periodType == 'monthly').toList();
+
+    // 当日窗口聚合（daily 预算口径；窗口=[date, 次日)）。
+    final String nextDay = _nextDayOf(date);
+    final dailySpend = await _moneySpendOver(date, nextDay);
+    final dailyKcal = await _kcalOver(date, nextDay);
+
+    final dailyItems = <Map<String, Object?>>[];
+    for (final budget in dailyBudgets) {
+      final used = _usedOf(budget, kindOf[budget.ledgerId], dailySpend, dailyKcal);
+      // daily 项键形与 v1 逐键一致（向后兼容，见迁移注记）。
+      dailyItems.add(<String, Object?>{
         'ledger_id': budget.ledgerId,
         'category_id': budget.categoryId,
         'amount': budget.amount,
@@ -372,13 +357,210 @@ class DaySummaryProjection {
         'remaining': budget.amount - used,
       });
     }
-    return <String, Object?>{'daily': items};
+
+    // 月度周期聚合：窗口按 (start,end) 去重后各跑两条聚合（budgets 少，
+    // 窗口通常 1-2 个；缓存供结转的上一周期复用）。
+    final Map<String, ({String start, String end})> windows =
+        <String, ({String start, String end})>{};
+    for (final budget in monthlyBudgets) {
+      windows[budget.id] = _monthlyWindowOf(date, budget.dayOfMonthStart);
+    }
+    final windowAgg = <String, _WindowAgg>{};
+    Future<_WindowAgg> aggFor(String start, String end) async {
+      final String key = '$start|$end';
+      final cached = windowAgg[key];
+      if (cached != null) {
+        return cached;
+      }
+      final agg = (
+        spend: await _moneySpendOver(start, end),
+        kcal: await _kcalOver(start, end),
+      );
+      windowAgg[key] = agg;
+      return agg;
+    }
+
+    final monthlyItems = <Map<String, Object?>>[];
+    for (final budget in monthlyBudgets) {
+      final window = windows[budget.id]!;
+      final agg = await aggFor(window.start, window.end);
+      int amount = budget.amount;
+      if (budget.carryOver) {
+        // 单步结转（§5.4⑥ carry_over）：上一周期 remaining 非负部分并入。
+        final prev = _previousMonthlyWindowOf(window, budget.dayOfMonthStart);
+        final prevAgg = await aggFor(prev.start, prev.end);
+        final prevUsed =
+            _usedOf(budget, kindOf[budget.ledgerId], prevAgg.spend, prevAgg.kcal);
+        final prevLeft = budget.amount - prevUsed;
+        if (prevLeft > 0) {
+          amount += prevLeft;
+        }
+      }
+      final used =
+          _usedOf(budget, kindOf[budget.ledgerId], agg.spend, agg.kcal);
+      monthlyItems.add(<String, Object?>{
+        'ledger_id': budget.ledgerId,
+        'category_id': budget.categoryId,
+        'amount': amount,
+        'used': used,
+        'remaining': amount - used,
+        'carry_over': budget.carryOver,
+        'period_start': window.start,
+        'period_end': window.end,
+      });
+    }
+
+    return <String, Object?>{
+      'v': 2,
+      'daily': dailyItems,
+      'monthly': monthlyItems,
+    };
+  }
+
+  /// 单条预算在给定窗口聚合下的 used（§5.4⑥ 口径）：
+  /// kcal 账本=kcal_in-kcal_out；money 总预算=账本支出；分类预算=账本+分类支出。
+  int _usedOf(
+    Budget budget,
+    String? ledgerKind,
+    ({Map<String, int> byLedger, Map<String, int> byLedgerCat}) spend,
+    Map<String, ({int kcalIn, int kcalOut})> kcal,
+  ) {
+    if (ledgerKind == 'kcal') {
+      // kcal 预算：吃=支出、运动=再入账（§5.4 kcal 账本行口径）。
+      final window = kcal[budget.ledgerId];
+      return (window?.kcalIn ?? 0) - (window?.kcalOut ?? 0);
+    }
+    if (budget.categoryId == null) {
+      return spend.byLedger[budget.ledgerId] ?? 0;
+    }
+    return spend.byLedgerCat['${budget.ledgerId}|${budget.categoryId}'] ?? 0;
+  }
+
+  /// 窗口内 money 支出聚合（§5.6⑬ 口径：active、行/事件未删；draft 计入——
+  /// 与 [_kDayAggregateSql] 同一过滤口径），按 (ledger, ledger|category) 归并。
+  Future<({Map<String, int> byLedger, Map<String, int> byLedgerCat})>
+      _moneySpendOver(String start, String endExclusive) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT l.ledger_id AS ledger_id, l.category_id AS category_id, '
+          'COALESCE(SUM(l.amount), 0) AS total '
+          'FROM entry_lines l INNER JOIN entries e ON e.id = l.entry_id '
+          "WHERE e.date >= ? AND e.date < ? AND l.type = 'money' "
+          "AND l.direction = 'out' AND l.status = 'active' "
+          'AND l.deleted_at IS NULL AND e.deleted_at IS NULL '
+          'GROUP BY l.ledger_id, l.category_id',
+          variables: [
+            Variable.withString(start),
+            Variable.withString(endExclusive),
+          ],
+        )
+        .get();
+    final byLedger = <String, int>{};
+    final byLedgerCat = <String, int>{};
+    for (final row in rows) {
+      // money 行 ledger_id 必填（§5.2②）；NULL 组防御性跳过（无归属不进预算）。
+      final ledgerId = row.readNullable<String>('ledger_id');
+      if (ledgerId == null) {
+        continue;
+      }
+      final categoryId = row.readNullable<String>('category_id');
+      final total = row.read<int>('total');
+      if (categoryId == null) {
+        byLedger[ledgerId] = (byLedger[ledgerId] ?? 0) + total;
+      } else {
+        byLedgerCat['$ledgerId|$categoryId'] =
+            (byLedgerCat['$ledgerId|$categoryId'] ?? 0) + total;
+        byLedger[ledgerId] = (byLedger[ledgerId] ?? 0) + total;
+      }
+    }
+    return (byLedger: byLedger, byLedgerCat: byLedgerCat);
+  }
+
+  /// 窗口内 kcal 收支聚合（按账本；calorie=摄入、burn=再入账，§5.2②）。
+  Future<Map<String, ({int kcalIn, int kcalOut})>> _kcalOver(
+    String start,
+    String endExclusive,
+  ) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT l.ledger_id AS ledger_id, '
+          "COALESCE(SUM(CASE WHEN l.type = 'calorie' AND l.direction = 'in' "
+          'THEN l.amount ELSE 0 END), 0) AS kcal_in, '
+          "COALESCE(SUM(CASE WHEN l.type = 'burn' AND l.direction = 'out' "
+          'THEN l.amount ELSE 0 END), 0) AS kcal_out '
+          'FROM entry_lines l INNER JOIN entries e ON e.id = l.entry_id '
+          "WHERE e.date >= ? AND e.date < ? AND l.type IN ('calorie', 'burn') "
+          "AND l.status = 'active' AND l.deleted_at IS NULL "
+          'AND e.deleted_at IS NULL GROUP BY l.ledger_id',
+          variables: [
+            Variable.withString(start),
+            Variable.withString(endExclusive),
+          ],
+        )
+        .get();
+    final result = <String, ({int kcalIn, int kcalOut})>{};
+    for (final row in rows) {
+      // kcal 行归集到内置 kcal 账本（§5.2②）；未挂账本的组不进预算口径。
+      final ledgerId = row.readNullable<String>('ledger_id');
+      if (ledgerId == null) {
+        continue;
+      }
+      result[ledgerId] = (
+        kcalIn: row.read<int>('kcal_in'),
+        kcalOut: row.read<int>('kcal_out'),
+      );
+    }
+    return result;
+  }
+
+  /// `yyyy-MM-dd` 次日（DateTime 日期溢出归一化，跨月/跨年安全）。
+  static String _nextDayOf(String date) {
+    final DateTime day = DateTime.parse(date);
+    return _dayTextOf(DateTime(day.year, day.month, day.day + 1));
+  }
+
+  /// DateTime → `yyyy-MM-dd`（§5.1 固定宽度 TEXT 日期）。
+  static String _dayTextOf(DateTime day) =>
+      '${day.year.toString().padLeft(4, '0')}-'
+      '${day.month.toString().padLeft(2, '0')}-'
+      '${day.day.toString().padLeft(2, '0')}';
+
+  /// [date] 所在的月度周期窗口（§5.4⑥ day_of_month_start）：
+  /// `[本月/上月的 startDay, 次月 startDay)`——包含 [date] 的那个周期。
+  static ({String start, String end}) _monthlyWindowOf(
+    String date,
+    int startDay,
+  ) {
+    final DateTime day = DateTime.parse(date);
+    final DateTime start = day.day >= startDay
+        ? DateTime(day.year, day.month, startDay)
+        : DateTime(day.year, day.month - 1, startDay);
+    final DateTime end = DateTime(start.year, start.month + 1, startDay);
+    return (start: _dayTextOf(start), end: _dayTextOf(end));
+  }
+
+  /// 上一周期窗口（carry_over 单步结转用，§5.4⑥）。
+  static ({String start, String end}) _previousMonthlyWindowOf(
+    ({String start, String end}) window,
+    int startDay,
+  ) {
+    final DateTime start = DateTime.parse(window.start);
+    final DateTime prevStart = DateTime(start.year, start.month - 1, startDay);
+    final DateTime prevEnd = DateTime(start.year, start.month, startDay);
+    return (start: _dayTextOf(prevStart), end: _dayTextOf(prevEnd));
   }
 }
 
 /// savings_progress 快照条目（§5.6⑬ goal_id→{contributed_minor,target_minor}，
 /// W13 实装）：进度卡/进度环直读的已解包形状（contributed/target 单位为分）。
 typedef SavingsProgressEntry = ({int contributedMinor, int targetMinor});
+
+/// 一个聚合窗口的 money/kcal 聚合结果（budget_snapshot v2 的月度周期/结转
+/// 窗口共用，W15）。
+typedef _WindowAgg = ({
+  ({Map<String, int> byLedger, Map<String, int> byLedgerCat}) spend,
+  Map<String, ({int kcalIn, int kcalOut})> kcal,
+});
 
 /// 解析 day_summary.savings_progress 快照 JSON（§5.6⑬ W13 实装形状）。
 ///

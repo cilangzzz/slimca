@@ -1,9 +1,13 @@
-/// 账本管理写入仓库：分类增删改（§5.4⑤ categories）与每日目标落库
-/// （§5.4⑥ budgets period=daily；§3.4 每日目标）。
+/// 账本管理写入仓库：分类增删改（§5.4⑤ categories）与每日/月度目标落库
+/// （§5.4⑥ budgets period=daily/monthly；§3.4 每日目标、§11.2 W15 预算
+/// 体系）。
 ///
 /// 写路径纪律（§5.1/§6.2）：
 /// - 全部写入带 HLC 戳（LocalWriteClock 发号，§6.3）：revision 自增、
 ///   updatedAt/hlc 单调，W5-6 SyncEngine 接入后可无损上送；
+/// - budgets 写路径经 core_db [cdb.BudgetsDao]（W15 收口）：业务行与
+///   outbox 行快照同事务入队（§6.2/§5.6⑯——W5-6 版直写 budgets 漏入队的
+///   补课项）、day_summary.budget_snapshot v2 投影联动（§5.6⑬）；
 /// - 删除一律软删墓碑（deleted_at，§5.1 删除行；墓碑拒绝复活 §6.5）；
 /// - 分类对账单是逻辑引用（不建外键，§5.4⑤/§6.2）：删分类后历史账单行
 ///   原样保留（join 落"未分类"），不做级联物理删；
@@ -44,6 +48,9 @@ abstract interface class LedgerAdminRepository {
   /// 现行每日目标（budgets period=daily 且未删，§5.4⑥）。
   Stream<List<LedgerDailyBudget>> watchDailyBudgets();
 
+  /// 现行月度支出目标（budgets period=monthly 且未删，§5.4⑥ P1/W15）。
+  Stream<List<LedgerDailyBudget>> watchMonthlyBudgets();
+
   /// 设置每日总支出目标（分；挂默认 money 账本，总预算 categoryId=NULL）。
   Future<void> setDailySpendGoal(int amountMinor);
 
@@ -56,6 +63,14 @@ abstract interface class LedgerAdminRepository {
     required int amountMinor,
   });
 
+  /// 设置月度总支出目标（分；§5.4⑥ period=monthly、周期起点/结转开关，
+  /// W15 预算体系；挂默认 money 账本、总预算 categoryId=NULL）。
+  Future<void> setMonthlySpendGoal(
+    int amountMinor, {
+    int dayOfMonthStart = 1,
+    bool carryOver = false,
+  });
+
   /// 清除每日总支出目标（软删墓碑；幂等）。
   Future<void> clearDailySpendGoal();
 
@@ -64,18 +79,30 @@ abstract interface class LedgerAdminRepository {
 
   /// 清除分类级每日目标（软删墓碑；幂等）。
   Future<void> clearCategoryDailyGoal(String categoryId);
+
+  /// 清除月度总支出目标（软删墓碑；幂等）。
+  Future<void> clearMonthlySpendGoal();
 }
 
-/// Drift 实现（复用 LedgerDao 解析目标账本——core_db 既有抽象，§10.3）。
+/// Drift 实现（复用 LedgerDao 解析目标账本、BudgetsDao 收口预算写路径——
+/// core_db 既有抽象，§10.3）。
 class DriftLedgerAdminRepository implements LedgerAdminRepository {
   DriftLedgerAdminRepository(this._db, {cdb.LocalWriteClock? clock})
-      : _clock = clock ?? cdb.LocalWriteClock(_db);
+      : _clock = clock ?? cdb.LocalWriteClock(_db),
+        // 投影实例无状态（仅 _db 引用）：预算写后同事务联动 budget_snapshot
+        // v2（§5.6⑬ W15）。
+        _budgets = cdb.BudgetsDao(
+          _db,
+          projection: cdb.DaySummaryProjection(_db),
+        );
 
   final cdb.AppDatabase _db;
   final cdb.LocalWriteClock _clock;
 
-  /// money/kcal periodType wire 值（§5.4⑥ daily=P0）。
-  static const String _kPeriodDaily = 'daily';
+  /// 预算写路径（W15 收口）：outbox 同事务入队 + budget_snapshot v2 联动
+  /// 由 DAO 强制（§6.2/§5.6⑬）。投影注入：本仓库持独立投影实例（无状态，
+  /// 仅 _db 引用）。
+  final cdb.BudgetsDao _budgets;
 
   // ── 分类（§5.4⑤） ─────────────────────────────────────────────────────
 
@@ -214,10 +241,10 @@ class DriftLedgerAdminRepository implements LedgerAdminRepository {
     return (maxRow?.sort ?? -1) + 1;
   }
 
-  // ── 每日目标（§5.4⑥ budgets period=daily + §3.4） ────────────────────
+  // ── 每日/月度目标（§5.4⑥ budgets period=daily/monthly + §3.4 + W15） ──
 
-  @override
-  Stream<List<LedgerDailyBudget>> watchDailyBudgets() {
+  /// budgets period 过滤的现行目标流（join 回账本/分类回填名称，§5.4⑥）。
+  Stream<List<LedgerDailyBudget>> _watchBudgets(String periodType) {
     final query = _db.select(_db.budgets).join(<drift.Join>[
       // budgets.ledger_id 逻辑引用，join 回账本取 kind（kcal 口径判定；
       // ledgers 列要被读取，不关 useColumns）。
@@ -232,7 +259,7 @@ class DriftLedgerAdminRepository implements LedgerAdminRepository {
       ),
     ]);
     query.where(
-      _db.budgets.periodType.equals(_kPeriodDaily) &
+      _db.budgets.periodType.equals(periodType) &
           _db.budgets.deletedAt.isNull(),
     );
     query.orderBy(<drift.OrderingTerm>[
@@ -248,14 +275,31 @@ class DriftLedgerAdminRepository implements LedgerAdminRepository {
               categoryId: row.readTable(_db.budgets).categoryId,
               categoryName: row.readTableOrNull(_db.categories)?.name,
               amount: row.readTable(_db.budgets).amount,
+              periodType: periodType,
+              dayOfMonthStart: row.readTable(_db.budgets).dayOfMonthStart,
+              carryOver: row.readTable(_db.budgets).carryOver,
             ),
         ]);
   }
 
   @override
+  Stream<List<LedgerDailyBudget>> watchDailyBudgets() {
+    return _watchBudgets(kBudgetPeriodDaily);
+  }
+
+  @override
+  Stream<List<LedgerDailyBudget>> watchMonthlyBudgets() {
+    return _watchBudgets(kBudgetPeriodMonthly);
+  }
+
+  @override
   Future<void> setDailySpendGoal(int amountMinor) async {
     final cdb.Ledger ledger = await _requireMoneyLedger();
-    await _upsertDailyBudget(ledger.id, null, amountMinor);
+    await _budgets.upsertBudget(
+      ledgerId: ledger.id,
+      periodType: kBudgetPeriodDaily,
+      amount: amountMinor,
+    );
   }
 
   @override
@@ -264,7 +308,11 @@ class DriftLedgerAdminRepository implements LedgerAdminRepository {
       throw ArgumentError.value(kcal, 'kcal', '每日热量目标必须为正整数（§3.4）');
     }
     final cdb.Ledger ledger = await _requireKcalLedger();
-    await _upsertDailyBudget(ledger.id, null, kcal);
+    await _budgets.upsertBudget(
+      ledgerId: ledger.id,
+      periodType: kBudgetPeriodDaily,
+      amount: kcal,
+    );
   }
 
   @override
@@ -280,30 +328,89 @@ class DriftLedgerAdminRepository implements LedgerAdminRepository {
     if (category == null) {
       throw StateError('分类不存在或已删：$categoryId（§5.4⑤）');
     }
-    await _upsertDailyBudget(ledger.id, categoryId, amountMinor);
+    await _budgets.upsertBudget(
+      ledgerId: ledger.id,
+      categoryId: categoryId,
+      periodType: kBudgetPeriodDaily,
+      amount: amountMinor,
+    );
+  }
+
+  @override
+  Future<void> setMonthlySpendGoal(
+    int amountMinor, {
+    int dayOfMonthStart = 1,
+    bool carryOver = false,
+  }) async {
+    final cdb.Ledger ledger = await _requireMoneyLedger();
+    await _budgets.upsertBudget(
+      ledgerId: ledger.id,
+      periodType: kBudgetPeriodMonthly,
+      amount: amountMinor,
+      // 月度周期起点 1..28、结转开关（§5.4⑥ P1/W15；校验在 BudgetsDao）。
+      dayOfMonthStart: dayOfMonthStart,
+      carryOver: carryOver,
+    );
   }
 
   @override
   Future<void> clearDailySpendGoal() async {
     final cdb.Ledger ledger = await _requireMoneyLedger();
-    await _softDeleteDailyBudget(ledger.id, null);
+    final cdb.Budget? existing = await _budgets.findCurrent(
+      ledgerId: ledger.id,
+      periodType: kBudgetPeriodDaily,
+    );
+    if (existing != null) {
+      await _budgets.softDeleteBudget(existing.id);
+    }
   }
 
   @override
   Future<void> clearDailyKcalGoal() async {
     final cdb.Ledger ledger = await _requireKcalLedger();
-    await _softDeleteDailyBudget(ledger.id, null);
+    final cdb.Budget? existing = await _budgets.findCurrent(
+      ledgerId: ledger.id,
+      periodType: kBudgetPeriodDaily,
+    );
+    if (existing != null) {
+      await _budgets.softDeleteBudget(existing.id);
+    }
   }
 
   @override
   Future<void> clearCategoryDailyGoal(String categoryId) async {
     final cdb.Ledger ledger = await _requireMoneyLedger();
-    await _softDeleteDailyBudget(ledger.id, categoryId);
+    final cdb.Budget? existing = await _budgets.findCurrent(
+      ledgerId: ledger.id,
+      categoryId: categoryId,
+      periodType: kBudgetPeriodDaily,
+    );
+    if (existing != null) {
+      await _budgets.softDeleteBudget(existing.id);
+    }
+  }
+
+  @override
+  Future<void> clearMonthlySpendGoal() async {
+    final cdb.Ledger ledger = await _requireMoneyLedger();
+    final cdb.Budget? existing = await _budgets.findCurrent(
+      ledgerId: ledger.id,
+      periodType: kBudgetPeriodMonthly,
+    );
+    if (existing != null) {
+      await _budgets.softDeleteBudget(existing.id);
+    }
   }
 
   /// 默认 money 账本（§5.4④ seed 恒保证存在；复用 core_db LedgerDao）。
+  ///
+  /// W15 多账本：以 settings 默认指针为准（[cdb.LedgerDao.defaultLedger]），
+  /// 指针缺失/失效回退首个可用 money 账本（§5.6⑲）。
   Future<cdb.Ledger> _requireMoneyLedger() async {
-    final cdb.Ledger? ledger = await cdb.LedgerDao(_db).defaultMoneyLedger();
+    final cdb.LedgerDao dao = cdb.LedgerDao(_db);
+    final cdb.Ledger? byPointer = await dao.defaultLedger();
+    final cdb.Ledger? ledger =
+        byPointer ?? await dao.defaultMoneyLedger();
     if (ledger == null) {
       throw StateError('默认 money 账本缺失（§5.4④ seed 保证恒存在）');
     }
@@ -317,90 +424,5 @@ class DriftLedgerAdminRepository implements LedgerAdminRepository {
       throw StateError('内置 kcal 账本缺失（§5.4④ seed 保证恒存在）');
     }
     return ledger;
-  }
-
-  /// 每日目标 upsert：同一 (ledgerId, categoryId, daily) 只允许一条现行
-  /// 预算——已有则原行改 amount（带新 HLC 戳），没有则插入。
-  Future<void> _upsertDailyBudget(
-    String ledgerId,
-    String? categoryId,
-    int amount,
-  ) async {
-    if (amount <= 0) {
-      throw ArgumentError.value(amount, 'amount', '每日目标必须为正数（§3.4）');
-    }
-    await _db.transaction(() async {
-      final cdb.Budget? existing =
-          await _findDailyBudget(ledgerId, categoryId);
-      final cdb.WriteStamp stamp = await _clock.next();
-      if (existing == null) {
-        await _db.into(_db.budgets).insert(
-              cdb.BudgetsCompanion.insert(
-                id: cdb.generateUuidV7(),
-                ledgerId: ledgerId,
-                // NULL=总预算（§5.4⑥）。
-                categoryId: drift.Value(categoryId),
-                periodType: _kPeriodDaily,
-                amount: amount,
-                // 月度周期字段为 P1 预留（§5.4⑥）：dayOfMonthStart 恒 1。
-                dayOfMonthStart: 1,
-                carryOver: false,
-                createdAt: stamp.updatedAtMs,
-                updatedAt: stamp.updatedAtMs,
-                hlc: stamp.hlc,
-                revision: 1,
-                deviceId: await _clock.deviceId(),
-              ),
-            );
-      } else {
-        await (_db.update(_db.budgets)
-              ..where((t) => t.id.equals(existing.id)))
-            .write(
-          cdb.BudgetsCompanion(
-            amount: drift.Value(amount),
-            updatedAt: drift.Value(stamp.updatedAtMs),
-            hlc: drift.Value(stamp.hlc),
-            revision: drift.Value(existing.revision + 1),
-          ),
-        );
-      }
-    });
-  }
-
-  /// 清除目标 = 预算行软删墓碑（§5.1 删除行）；幂等。
-  Future<void> _softDeleteDailyBudget(
-    String ledgerId,
-    String? categoryId,
-  ) async {
-    final cdb.Budget? existing = await _findDailyBudget(ledgerId, categoryId);
-    if (existing == null) {
-      return;
-    }
-    final cdb.WriteStamp stamp = await _clock.next();
-    await (_db.update(_db.budgets)..where((t) => t.id.equals(existing.id)))
-        .write(
-      cdb.BudgetsCompanion(
-        deletedAt: drift.Value(stamp.updatedAtMs),
-        updatedAt: drift.Value(stamp.updatedAtMs),
-        hlc: drift.Value(stamp.hlc),
-        revision: drift.Value(existing.revision + 1),
-      ),
-    );
-  }
-
-  /// 现行每日预算查询（未删）；总预算与分类预算按 categoryId 区分
-  /// （NULL 与非 NULL 是不同目标，§5.4⑥）。
-  Future<cdb.Budget?> _findDailyBudget(String ledgerId, String? categoryId) {
-    return (_db.select(_db.budgets)
-          ..where((t) {
-            final drift.Expression<bool> categoryPredicate = categoryId == null
-                ? t.categoryId.isNull()
-                : t.categoryId.equals(categoryId);
-            return t.periodType.equals(_kPeriodDaily) &
-                t.ledgerId.equals(ledgerId) &
-                categoryPredicate &
-                t.deletedAt.isNull();
-          }))
-        .getSingleOrNull();
   }
 }

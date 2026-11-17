@@ -83,6 +83,80 @@ abstract final class LedgerCalendar {
     return (start: '$month-01', end: end);
   }
 
+  // ── W15 统计报表周期口径（§3.4「周/月/年三档」、§11.2 W15） ────────────
+
+  /// DateTime → `yyyy-MM-dd`（§5.1 固定宽度 TEXT 日期；月份两位补零）。
+  static String dayText(DateTime day) =>
+      '${day.year}-${day.month.toString().padLeft(2, '0')}-'
+      '${day.day.toString().padLeft(2, '0')}';
+
+  /// 周半开区间 `[周一, 次周一)`（§3.4 周档；周起始=周一，与 [weekdayLong]
+  /// 「1=周一」口径一致）。
+  static ({String start, String end}) weekRange(DateTime day) {
+    final DateTime normalized = normalize(day);
+    final DateTime monday =
+        normalized.subtract(Duration(days: normalized.weekday - 1));
+    final DateTime nextMonday =
+        DateTime(monday.year, monday.month, monday.day + 7);
+    return (start: dayText(monday), end: dayText(nextMonday));
+  }
+
+  /// 年半开区间 `[1月1日, 次年1月1日)`（§3.4 年档）。
+  static ({String start, String end}) yearRange(DateTime anchor) =>
+      (
+        start: '${anchor.year}-01-01',
+        end: '${anchor.year + 1}-01-01',
+      );
+
+  /// 周锚点平移 [delta] 周（锚点恒落回周一 0 点，切周共用）。
+  static DateTime shiftWeek(DateTime anchor, int delta) {
+    final DateTime normalized = normalize(anchor);
+    final DateTime monday =
+        normalized.subtract(Duration(days: normalized.weekday - 1));
+    final DateTime moved = monday.add(Duration(days: 7 * delta));
+    return DateTime(moved.year, moved.month, moved.day);
+  }
+
+  /// 年锚点平移 [delta] 年（归位当年 1 月 1 日，切年共用）。
+  static DateTime shiftYear(DateTime anchor, int delta) =>
+      DateTime(anchor.year + delta);
+
+  /// 周档标题「11月16日 - 11月22日」（区间含首尾；非法日期原样返回）。
+  static String weekRangeTitle(String start, String endExclusive) {
+    final RegExpMatch? startMatch = dayPattern.firstMatch(start);
+    final RegExpMatch? endMatch = dayPattern.firstMatch(endExclusive);
+    if (startMatch == null || endMatch == null) {
+      return '$start ~ $endExclusive';
+    }
+    final DateTime endDay = DateTime(
+      int.parse(endMatch.group(1)!),
+      int.parse(endMatch.group(2)!),
+      int.parse(endMatch.group(3)!),
+    ).subtract(const Duration(days: 1));
+    return '${int.parse(startMatch.group(2)!)}月${int.parse(startMatch.group(3)!)}日'
+        ' - ${endDay.month}月${endDay.day}日';
+  }
+
+  /// 年档标题「2026年」。
+  static String yearTitle(DateTime anchor) => '${anchor.year}年';
+
+  /// 图表 x 轴日桶标签「16日」（非自然日形态原样返回，防御脏数据）。
+  static String dayAxisLabel(String date) {
+    final RegExpMatch? match = dayPattern.firstMatch(date);
+    if (match == null) {
+      return date;
+    }
+    return '${int.parse(match.group(3)!)}日';
+  }
+
+  /// 图表 x 轴月桶标签「11月」（非月前缀形态原样返回，防御脏数据）。
+  static String monthAxisLabel(String month) {
+    if (!monthPattern.hasMatch(month)) {
+      return month;
+    }
+    return '${int.parse(month.substring(5, 7))}月';
+  }
+
   /// 日分组头标题「11月16日 周一」（§3.4 按日分组；非自然日形态原样
   /// 返回，防御脏数据不抛异常影响整页渲染）。
   static String dayGroupTitle(String date) {

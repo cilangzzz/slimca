@@ -150,6 +150,45 @@ class SlimcaSharedAxisPageRoute<T> extends PageRouteBuilder<T> {
   }
 }
 
+/// go_router `pageBuilder` 形态的共享轴转场页（§9.5「路由级转场一律显式
+/// PageRouteBuilder」的 go_router 接线件）。
+///
+/// go_router 的 `pageBuilder` 回调契约要求返回 `Page`（不是 Route）——本类
+/// 是 [SlimcaSharedAxisPageRoute] 的 Page 包装：`createRoute` 时仍构造路由级
+/// PageRouteBuilder，时长/动效档与 §9.3#2 一致（full 档 280ms / off 档 100ms
+/// 淡入淡出）。`name/arguments/restorationId` 直通 Page 基类，go_router 的
+/// matchedLocation 经 `name` 注入（与 RouteSettings 等价）。
+class SlimcaSharedAxisPage<T> extends Page<T> {
+  const SlimcaSharedAxisPage({
+    required this.builder,
+    this.type = SlimcaSharedAxisType.x,
+    this.motion,
+    super.key,
+    super.name,
+    super.arguments,
+    super.restorationId,
+  });
+
+  /// 目标页 builder（同 [SlimcaSharedAxisPageRoute] 的 builder）。
+  final WidgetBuilder builder;
+
+  /// 共享轴轴别（默认 X 水平轴，§9.3#2）。
+  final SlimcaSharedAxisType type;
+
+  /// 动效档（缺省按 MotionLevel=full 解析，§9.3）。
+  final MotionConfig? motion;
+
+  @override
+  Route<T> createRoute(BuildContext context) {
+    return SlimcaSharedAxisPageRoute<T>(
+      settings: this,
+      type: type,
+      motion: motion,
+      builder: builder,
+    );
+  }
+}
+
 /// Widget 级共享轴切换器（§9.3#2「AnimatedSwitcher + layout delta」手段）：
 /// 换 child（key 不同）即触发，用于仪表盘左右滑切日（§3.2）与平级内容切换（§4.1）。
 /// 进场/离场为对称位移（carousel 观感）；FLIP 位置保持由业务列表配合 layout delta 实现。

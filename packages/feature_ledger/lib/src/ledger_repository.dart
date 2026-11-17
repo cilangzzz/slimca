@@ -24,17 +24,29 @@ abstract interface class LedgerRepository {
   ///
   /// [categoryId] 非空时按"行分类"过滤：只保留命中行的账，且日合计/
   /// 月合计在过滤后的行上重算——筛选态的数字自洽（§3.4 分类筛选）。
+  ///
+  /// [ledgerId] 非空时按"行账本"过滤（§11.2 W15 多账本 P1、§5.4④）：
+  /// money 账本 id 只见该账本流水，kcal 账本 id 只见热量/运动行——
+  /// 过滤互斥由行级 ledger_id 保证（§5.2② 行必挂账本）。
   Stream<List<LedgerDayGroup>> watchMonthBillGroups(
     String month, {
     String? categoryId,
+    String? ledgerId,
   });
 
   /// 月度分类汇总（§3.4 统计雏形：per-category money 行求和；支出降序）。
-  Stream<List<LedgerCategorySum>> watchMonthCategorySums(String month);
+  /// [ledgerId] 非空时仅汇总该账本的 money 行（W15 多账本，§5.4④）。
+  Stream<List<LedgerCategorySum>> watchMonthCategorySums(
+    String month, {
+    String? ledgerId,
+  });
 
   /// 某日的日简报（§3.4：今日收支/热量摘要；数据走 day_summary 投影）。
   /// 当日投影行尚未构建（如今日还没有记录）时发 null——由 UI 展示零值
   /// 与引导，而不是构造假数据（§5.6⑬ 本地件只读）。
+  ///
+  /// W15 注（§11.2 多账本）：日简报恒**全量口径**——day_summary 投影无
+  /// per-账本拆列（§5.6⑬），per-账本视角请用账单流/报表页的 ledgerId 过滤。
   Stream<LedgerDayBriefing?> watchDayBriefing(String date);
 
   /// 全部分类选项（筛选条/管理页共用；kind → sort 排序，§5.4⑤）。
@@ -59,6 +71,7 @@ class DriftLedgerRepository implements LedgerRepository {
   Stream<List<LedgerDayGroup>> watchMonthBillGroups(
     String month, {
     String? categoryId,
+    String? ledgerId,
   }) {
     final ({String start, String end}) range = LedgerCalendar.monthRange(month);
     // entry_lines → entries（主干，取 date/title/kind）→ categories（左连，
@@ -75,14 +88,18 @@ class DriftLedgerRepository implements LedgerRepository {
         _db.categories.id.equalsExp(_db.entryLines.categoryId),
       ),
     ]);
-    query.where(
-      _db.entries.date.isBiggerOrEqualValue(range.start) &
-          _db.entries.date.isSmallerThanValue(range.end) &
-          _db.entries.deletedAt.isNull() &
-          _db.entries.status.isIn(_activeEntryStatuses) &
-          _db.entryLines.status.equals(dom.LineStatus.active.wire) &
-          _db.entryLines.deletedAt.isNull(),
-    );
+    var predicate = _db.entries.date.isBiggerOrEqualValue(range.start) &
+        _db.entries.date.isSmallerThanValue(range.end) &
+        _db.entries.deletedAt.isNull() &
+        _db.entries.status.isIn(_activeEntryStatuses) &
+        _db.entryLines.status.equals(dom.LineStatus.active.wire) &
+        _db.entryLines.deletedAt.isNull();
+    // 多账本过滤（§11.2 W15、§5.4④）：行级 ledger_id 精确匹配——账本间
+    // 互斥（一行一账本，§5.2②），过滤集合两两不相交。
+    if (ledgerId != null) {
+      predicate = predicate & _db.entryLines.ledgerId.equals(ledgerId);
+    }
+    query.where(predicate);
     query.orderBy(<drift.OrderingTerm>[
       drift.OrderingTerm.desc(_db.entries.date),
       drift.OrderingTerm.asc(_db.entries.createdAt),
@@ -154,12 +171,18 @@ class DriftLedgerRepository implements LedgerRepository {
   }
 
   @override
-  Stream<List<LedgerCategorySum>> watchMonthCategorySums(String month) {
+  Stream<List<LedgerCategorySum>> watchMonthCategorySums(
+    String month, {
+    String? ledgerId,
+  }) {
     final ({String start, String end}) range = LedgerCalendar.monthRange(month);
     // 月度 per-category money 行求和（§3.4 统计雏形）：customSelect 聚合
     // （与 core_db 投影同款口径）。未分类行 category_id IS NULL 由
     // LEFT JOIN + GROUP BY 自然落出；LEFT JOIN 条件带上 deleted_at IS
     // NULL——已删分类的历史账单归入"未分类"而非丢名字（§5.4⑤ 逻辑引用）。
+    // W15 多账本：ledger_id 可选过滤（§5.4④，过滤集合互斥）。
+    final String ledgerFilter =
+        ledgerId == null ? '' : '  AND l.ledger_id = ?';
     final String sql = <String>[
       'SELECT l.category_id AS category_id,',
       '       c.name AS category_name,',
@@ -176,6 +199,7 @@ class DriftLedgerRepository implements LedgerRepository {
       '  AND e.date < ?',
       '  AND e.deleted_at IS NULL',
       "  AND e.status IN ('confirmed', 'edited')",
+      ledgerFilter,
       'GROUP BY l.category_id',
       'ORDER BY spend_minor DESC',
     ].join(' ');
@@ -185,6 +209,7 @@ class DriftLedgerRepository implements LedgerRepository {
       variables: <drift.Variable<String>>[
         drift.Variable.withString(range.start),
         drift.Variable.withString(range.end),
+        if (ledgerId != null) drift.Variable.withString(ledgerId),
       ],
     )
         .watch()

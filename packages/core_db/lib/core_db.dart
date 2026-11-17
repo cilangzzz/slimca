@@ -22,10 +22,18 @@
 ///   goal_id→{contributed_minor,target_minor} 多目标）与
 ///   `parseSavingsProgress` 解包辅助；`TodoDao` 增补重复规则三字段
 ///   （repeat_rule/rrule_anchor_date/remind_at，§5.5⑩）。
+/// - 多账本+预算体系（W15，§11.2 主线）：`LedgerDao` 扩展账本生命周期写
+///   路径——建账本/重命名/归档软删/切换默认（kcal 账本不可删不可多开，
+///   §5.4④/§3.4 多账本 P1）；`BudgetsDao`——预算 CRUD（按账本/按分类/
+///   总预算，周期 daily/monthly，§5.4⑥）与投影联动；
+///   `DaySummaryProjection` 的 budget_snapshot **v2** 实装（§5.6⑬：
+///   daily+monthly 双周期，daily 项键形向后兼容 v1，迁移注记见
+///   day_summary_projection.dart）。
 library;
 
 export 'src/app_database.dart';
 export 'src/dao/attachments_dao.dart';
+export 'src/dao/budgets_dao.dart';
 export 'src/dao/category_dao.dart';
 export 'src/dao/day_summary_projection.dart';
 export 'src/dao/default_seed.dart';

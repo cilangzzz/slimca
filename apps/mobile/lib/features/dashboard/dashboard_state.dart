@@ -1,6 +1,8 @@
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
 import 'package:drift/drift.dart';
+import 'package:feature_ledger/feature_ledger.dart'
+    show LedgerBudgetItem, parseBudgetSnapshot;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
@@ -188,6 +190,41 @@ final dailyBudgetProvider =
   return query.watchSingleOrNull().map(
         (row) => row?.readTable(database.budgets).amount ?? 0,
       );
+});
+
+/// 当日预算快照流（§5.6⑬ budget_snapshot；W15 任务 2「支出卡接预算快照
+/// v2」——余/超支状态色与 per-分类明细入口的数据面）。
+///
+/// 快照直出纪律（§3.2）：读 day_summary 投影行的 budget_snapshot JSON，经
+/// feature_ledger `parseBudgetSnapshot` 解包（防御性：坏形状→空列表自愈，
+/// 与 savings_progress 同一口径），零业务查询。kcal 账本 id 集合用于把
+/// 快照条目按账本 kind 分类（kcal 项由热量环口径消费，money 项=支出卡）。
+/// 写路径（预算设置/记一笔）同事务重算当日投影 → 本流即时重发。
+final dashboardBudgetSnapshotProvider = StreamProvider.autoDispose
+    .family<List<LedgerBudgetItem>, String>((ref, date) {
+  final projection = ref.watch(daySummaryProjectionProvider);
+  final database = ref.watch(appDatabaseProvider);
+  return projection.watchDaySummary(date).asyncMap((row) async {
+    final kcalLedger = await db.LedgerDao(database).kcalLedger();
+    return parseBudgetSnapshot(
+      row?.budgetSnapshot,
+      daySpendMinor: row?.spendMinor ?? 0,
+      dayNetKcal: row?.netKcal ?? 0,
+      kcalLedgerIds:
+          kcalLedger == null ? const <String>{} : <String>{kcalLedger.id},
+    );
+  });
+});
+
+/// 分类名映射流（§5.4⑤；支出卡 per-分类预算行把快照 category_id 回填为
+/// 展示名——分类改名后跟随最新名，逻辑引用不建外键 §5.4⑤）。
+final categoryNamesProvider = StreamProvider<Map<String, String>>((ref) {
+  return ref
+      .watch(ledgerAdminRepositoryProvider)
+      .watchCategoryOptions()
+      .map((options) => <String, String>{
+            for (final option in options) option.id: option.name,
+          });
 });
 
 /// 当日明细 join 流 → 聚合视图（§5.3 facet 拆行：热量/消耗/金额各行为

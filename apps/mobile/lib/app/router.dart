@@ -6,14 +6,17 @@ import 'package:feature_plan/feature_plan.dart' show FitnessPlanPage;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:ui_kit/ui_kit.dart' show SlimcaSharedAxisPage;
 
 import '../features/capture/capture_channels_sheet.dart';
 import '../features/dashboard/dashboard_state.dart';
 import '../features/dashboard/today_dashboard_page.dart';
+import '../features/ledger/budget_settings_page.dart';
 import '../features/ledger/ledger_page.dart';
 import '../features/plan/fitness_log_page.dart';
 import '../features/plan/plan_page.dart';
 import '../features/settings/settings_page.dart';
+import '../features/stats/stats_report_screen.dart';
 import '../features/workout/workout_runner_page.dart';
 import '../telemetry/telemetry.dart';
 import 'providers.dart';
@@ -47,12 +50,24 @@ final GoRouter slimcaRouter = GoRouter(
             ),
           ],
         ),
-        // Tab 2 账本：流水列表（W5-6 真页）+分类管理+预算入口+统计入口（§4.2）
+        // Tab 2 账本：流水列表（W5-6 真页）+分类管理+预算入口+统计入口（§4.2）。
+        // W15：顶栏多账本切换器 + 分类筛选条（§11.2、§3.4 多账本/分类 P1）；
+        // /ledger/budgets 子路由（§4.3 预算设置，分支栈内 push——底栏保持，
+        // 路由级转场注入共享轴 PageRouteBuilder，§9.5）。
         StatefulShellBranch(
           routes: [
             GoRoute(
               path: '/ledger',
               builder: (context, state) => const LedgerPage(),
+              routes: [
+                GoRoute(
+                  path: 'budgets',
+                  pageBuilder: (context, state) => SlimcaSharedAxisPage(
+                    name: state.matchedLocation,
+                    builder: (_) => const BudgetSettingsPage(),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -95,6 +110,17 @@ final GoRouter slimcaRouter = GoRouter(
           ],
         ),
       ],
+    ),
+    // 统计报表（§4.3 /stats P1、W15 任务 1）：壳外全屏路由——周/月/年三档
+    // + 钱-热量双轴联动的专注阅读面（返回回账本 Tab 栈）；页面本体=
+    // feature_ledger ReportPage（W15），本路由只做壳层装配屏 + 转场注入
+    // （共享轴 PageRouteBuilder，§9.5，§4.3 /stats 转场列）。
+    GoRoute(
+      path: '/stats',
+      pageBuilder: (context, state) => SlimcaSharedAxisPage(
+        name: state.matchedLocation,
+        builder: (_) => const StatsReportScreen(),
+      ),
     ),
   ],
 );
