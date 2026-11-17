@@ -127,8 +127,21 @@ class LlmModelPreset {
     vision: true,
   );
 
+  /// DeepSeek（OpenAI 兼容端点；2026-11-17 真实联调通过：文本双解析与
+  /// 多模态 image_url 格式均被端点接受。注意 API id 与展示名不同——
+  /// 端点只认 `deepseek-flash`/`deepseek-v4-pro`，用户口述的
+  /// 「DeepSeek-V4.1-Flash-1017」是展示名；价目未公开实测，暂 null 不虚报）。
+  static const LlmModelPreset deepseek = LlmModelPreset(
+    id: 'deepseek-flash',
+    provider: 'deepseek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-flash',
+    jsonCapability: LlmJsonCapability.jsonObject,
+    vision: true,
+  );
+
   /// 全部预设（宿主做双供应商 fallback 编排时遍历，§7.4 第 4 级）。
-  static const List<LlmModelPreset> all = [gpt4oMini, qwenVl, glm4v];
+  static const List<LlmModelPreset> all = [gpt4oMini, qwenVl, glm4v, deepseek];
 }
 
 /// OpenAI 兼容协议适配器（§7.1 可插拔接口的实现；§7.4 双供应商 fallback

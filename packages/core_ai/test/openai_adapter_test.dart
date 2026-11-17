@@ -352,9 +352,9 @@ void main() {
     });
   });
 
-  group('预设清单（§7.5：GPT-4o-mini / Qwen-VL / GLM-4V）', () {
-    test('三预设齐备且字段口径正确', () {
-      expect(LlmModelPreset.all, hasLength(3));
+  group('预设清单（§7.5：GPT-4o-mini / Qwen-VL / GLM-4V / DeepSeek）', () {
+    test('四预设齐备且字段口径正确', () {
+      expect(LlmModelPreset.all, hasLength(4));
       expect(LlmModelPreset.gpt4oMini.model, 'gpt-4o-mini');
       expect(LlmModelPreset.gpt4oMini.jsonCapability, LlmJsonCapability.jsonSchema);
       expect(LlmModelPreset.gpt4oMini.pricing, isNotNull);
@@ -365,6 +365,15 @@ void main() {
       expect(LlmModelPreset.glm4v.vision, isTrue);
       expect(LlmModelPreset.qwenVl.jsonCapability, LlmJsonCapability.jsonObject);
       expect(LlmModelPreset.glm4v.jsonCapability, LlmJsonCapability.jsonObject);
+
+      // DeepSeek：2026-11-17 真实联调通过（文本双解析+多模态格式）；
+      // API id 与展示名不同（展示名 DeepSeek-V4.1-Flash-1017 → API id
+      // deepseek-flash）；价目待实测故 pricing 为 null 不虚报。
+      expect(LlmModelPreset.deepseek.baseUrl, 'https://api.deepseek.com/v1');
+      expect(LlmModelPreset.deepseek.model, 'deepseek-flash');
+      expect(LlmModelPreset.deepseek.vision, isTrue);
+      expect(LlmModelPreset.deepseek.jsonCapability, LlmJsonCapability.jsonObject);
+      expect(LlmModelPreset.deepseek.pricing, isNull, reason: '价目未实测不虚报（§7.5 口径）');
     });
   });
 }
