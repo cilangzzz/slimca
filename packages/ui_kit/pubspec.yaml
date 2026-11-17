@@ -15,7 +15,11 @@ dependencies:
   material_color_utilities: ^0.11.1
   # §8.3 dynamic_color（Android 12+ Material You 平台取色；两源映射见
   # src/tokens/dynamic_color.dart，不支持平台回退手动种子色）
-  dynamic_color: ^1.7.0
+  # 1.8.1 精确 pin：1.9.0 的 android/build.gradle.kts 有上游 bug（未应用 kotlin
+  # 插件却用 kotlin{} 扩展、自带 buildscript 硬编码 AGP 8.13.1），release 构建必挂；
+  # 2.x 需 material_color_utilities ^0.13.0，与 Flutter 3.32 钉定 0.11.1 冲突。
+  # 待 Flutter SDK 升级后再评估 2.x（2026-11-17 构建实测）
+  dynamic_color: 1.8.1
 
 dev_dependencies:
   flutter_test:
