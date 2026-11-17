@@ -14,6 +14,10 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
+    <!-- W13 待办提醒（§11.2 任务 3「本地通知」）：Android 13+（API 33）通知
+         运行时权限——运行时弹窗由 FlutterLocalReminderScheduler.ensurePermission
+         在首个提醒待办创建/启动期一次性发起（manifest 声明是运行时请求前置）。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- 相机为可选能力（§3.3）：无相机设备仍可经相册入口使用拍照通道。 -->
     <uses-feature
         android:name="android.hardware.camera"

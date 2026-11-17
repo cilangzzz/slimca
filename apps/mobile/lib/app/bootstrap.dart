@@ -40,6 +40,8 @@ import '../ai/capture_parser_factory.dart';
 import '../ai/photo_parser_factory.dart';
 import '../ai/raw_input_gate_capture_parser.dart';
 import '../ai/telemetry_capture_parser.dart';
+import '../notifications/flutter_local_reminder_scheduler.dart';
+import '../notifications/reminder_sync.dart';
 import '../photo/photo_attachment_store.dart';
 import '../photo/photo_compressor.dart';
 import '../photo/photo_image_source.dart';
@@ -68,6 +70,7 @@ class AppRuntime {
     required this.telemetry,
     required this.rawInputPolicy,
     required this.syncCoordinator,
+    required this.reminderCoordinator,
   });
 
   /// ProviderScope overrides（含遥测/开关/同步引擎/协调器的注入）。
@@ -81,6 +84,10 @@ class AppRuntime {
 
   /// 同步协调器（main() start() + 生命周期观察者，§6.2）。
   final SyncCoordinator syncCoordinator;
+
+  /// 提醒对账协调器（main() start()，§11.2 W13 任务 3：todos 流 → 按展开
+  /// 实例调度本地通知）。
+  final ReminderSyncCoordinator reminderCoordinator;
 }
 
 /// 启动装配：返回 main() 注入 ProviderScope 的 [AppRuntime]。
@@ -153,6 +160,15 @@ Future<AppRuntime> bootstrap() async {
   // 启动期一次性，失败不阻塞启动（下轮重试，§6.1）。
   unawaited(_sweepAttachmentResidue(database));
 
+  // ── W13 · 本地通知调度（§11.2 W13 任务 3）：flutter_local_notifications
+  // 适配器（Android 13+ POST_NOTIFICATIONS 运行时请求在适配器内接线）+
+  // 提醒对账协调器（todos 流 → 按展开实例调度；main() start()）。
+  final reminderScheduler = FlutterLocalReminderScheduler();
+  final reminderCoordinator = ReminderSyncCoordinator(
+    db: database,
+    scheduler: reminderScheduler,
+  );
+
   return AppRuntime(
     overrides: [
       appDatabaseProvider.overrideWithValue(database),
@@ -212,10 +228,13 @@ Future<AppRuntime> bootstrap() async {
       rawInputPolicyProvider.overrideWithValue(policy),
       syncEngineProvider.overrideWithValue(engine),
       syncCoordinatorProvider.overrideWithValue(coordinator),
+      // W13 提醒调度注入点（§11.2 任务 3）：真实通道适配器（测试注入 Fake）。
+      reminderSchedulerProvider.overrideWithValue(reminderScheduler),
     ],
     telemetry: telemetry,
     rawInputPolicy: policy,
     syncCoordinator: coordinator,
+    reminderCoordinator: reminderCoordinator,
   );
 }
 

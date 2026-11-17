@@ -149,6 +149,26 @@ final dashboardTodosProvider =
           ));
 });
 
+/// 当日存钱进度流（§3.2 卡片墙第 5 项「上线后自动接入」、§5.6⑬
+/// savings_progress 快照、§11.2 W13 任务 2）。
+///
+/// 快照直出纪律（§3.2「首帧读投影不发起业务查询」）：读 day_summary 投影行
+/// 的 savings_progress JSON（goal_id→{contributed_minor,target_minor}），
+/// 经 [db.parseSavingsProgress] 解包（防御性：坏形状→空 Map 自愈）；零业务
+/// 查询。空 Map = 无当日有效目标（W1-W12 恒 NULL 旧行为即此空态）。
+///
+/// 响应性：存钱写路径（目标/贡献 DAO，§5.6⑬ W13 实装）在写事务内重算当日
+/// 快照 → 本流即时重发 → 进度卡数字变化（任务 5 验收）。
+final dashboardSavingsProgressProvider = StreamProvider.autoDispose
+    .family<Map<String, db.SavingsProgressEntry>, String>((ref, date) {
+  final projection = ref.watch(daySummaryProjectionProvider);
+  return projection.watchDaySummary(date).map((row) {
+    final json = row?.savingsProgress;
+    if (json == null) return const <String, db.SavingsProgressEntry>{};
+    return db.parseSavingsProgress(json);
+  });
+});
+
 /// kcal 账本每日热量目标流（§5.4⑥ budgets：kcal 账本「预算=收入」§2.1③）。
 ///
 /// W2 无预算设置 UI（每日目标 W5-6 接入，§11 W5-6），恒空=未设置；

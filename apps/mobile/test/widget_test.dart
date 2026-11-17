@@ -1,6 +1,7 @@
-// Slimca W2+W3-4+W5-6+W7-8 冒烟测试（§11 W2 手动记一笔 → 仪表盘即时更新 +
+// Slimca W2+W3-4+W5-6+W7-8+W13 冒烟测试（§11 W2 手动记一笔 → 仪表盘即时更新 +
 // §11.1 W3-4 AI 双解析闭环 + §11.1 W5-6 录入通道/真页 Tab + §11.1 W7-8
-// raw_input 上云开关/付费墙占位/遥测装配）——三接缝收敛后的壳层装配口径。
+// raw_input 上云开关/付费墙占位/遥测装配 + §11.2 W13 存钱卡空态与计划
+// 存钱目标入口）——三接缝收敛后的壳层装配口径。
 //
 // 覆盖链路（§4.2 壳 + §9.3#3 录入抽屉 + §6.2 写路径 + §3.3 语音通道）：
 // 冷启动首帧直出仪表盘（无 spinner §2.3 步 0）→ 4 Tab 导航壳（§4.2）→
@@ -11,7 +12,9 @@
 // W3-4：AI 一句话输入 → 缺省装配（dart-define 工厂无 key → core_ai
 // HeuristicFakeLlmAdapter 完整管线，零真实网络）→ 确认卡 → 确认入账 →
 // 仪表盘即时更新；W5-6：账本/计划 Tab 真页（§3.4 流水按日分组、§4.2 计划
-// 三卡 + 待办快速添加 §3.6）。
+// 三卡 + 待办快速添加 §3.6）；W13：仪表盘存钱卡与计划 Tab 存钱卡空态=
+// 无目标引导创建（§11.2 W13 任务 1/2；建档→投币→数字变化 e2e 见
+// savings_progress_card_test.dart）。
 //
 // W7-8（第二个用例）：我的 Tab → raw_input 上云开关默认关（§3.3/§3.7）→
 // 开关写回 settings 表（§5.6⑲ JSON 值）→ 付费墙双轨 SKU 目录（§3.9，
@@ -150,6 +153,11 @@ void main() {
     expect(find.text('计划'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
 
+    // W13 存钱进度卡（§3.2 卡片墙第 5 项、§11.2 W13 任务 2）：无目标空态
+    // =引导创建（day_summary.savings_progress 快照 NULL 即此空态）。
+    expect(find.textContaining('还没有存钱目标'), findsOneWidget,
+        reason: '§11.2 W13 仪表盘存钱卡空态=无目标引导创建');
+
     // ── W2：仅记钱手动记一笔（§11 W2 验收线）────────────────────────
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pumpAndSettle();
@@ -285,8 +293,12 @@ void main() {
     expect(find.text('健身'), findsOneWidget);
     expect(find.text('记录健身'), findsOneWidget,
         reason: '§4.3 /plan/fitness 子路由入口');
-    expect(find.textContaining('存钱目标 P1'), findsOneWidget,
-        reason: '§3.6 存钱 P1 占位卡');
+    // W13 存钱卡（§3.6、§11.2 W13 任务 1）：占位换真数据——空态引导建档
+    // + 新建目标入口（建档/投币流 e2e 见 savings_progress_card_test）。
+    expect(find.textContaining('设定第一个存钱目标'), findsOneWidget,
+        reason: '§11.2 W13 存钱卡空态=无目标引导创建');
+    expect(find.text('新建目标'), findsOneWidget,
+        reason: '§11.2 W13 存钱目标入口');
     // 待办快速添加 → 当日流即时重发（§5.5⑩）。
     await tester.enterText(
       find.byKey(const Key('plan_todo_input')),

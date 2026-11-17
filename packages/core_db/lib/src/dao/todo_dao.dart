@@ -9,6 +9,12 @@
 /// 路径（create/setDone/updateDetails/softDelete）的业务行与行快照入队
 /// sync_outbox 同事务提交；no-op 分支（重复勾选/重复取消）不产生任何写、
 /// 也不入队。pull 半边走 feature_sync 通用整行落库、不经本 DAO，无回声。
+///
+/// W13 扩展（§11.2 W13 主线「待办完整版（RRULE+提醒）」）：create/
+/// updateDetails 增补重复规则三字段（repeat_rule=RRULE RFC5545、
+/// rrule_anchor_date=展开锚点日 DTSTART——后者为 v1 内补列，见
+/// [backfillTodoRruleAnchorColumn]、remind_at=提醒时刻）；RRULE 实例展开
+/// 与提醒调度在 feature 层，数据层只存列与出网。
 library;
 
 import 'package:drift/drift.dart';
@@ -38,15 +44,28 @@ class TodoDao {
 
   /// 新建待办（§5.5⑩）：[date] NULL=无日期收集箱；id 由本地生成 UUIDv7
   /// （§5.1 主键约定）。业务行与 outbox 行快照同事务（§6.2）。
+  ///
+  /// W13 重复/提醒字段（§11.2 W13 主线、§5.5⑩）：
+  /// - [repeatRule] 为 RRULE（RFC5545）文本，实例日期=RRULE 自锚点日展开；
+  /// - [rruleAnchorDate] 为展开锚点日（DTSTART，v1 内补列）：缺省取 [date]
+  ///   ——重复待办自计划日起展开；收集箱（date=NULL）重复待办需显式传锚点，
+  ///   否则无展开起点（anchor 落 NULL）；
+  /// - [remindAt] 为提醒时刻 UTC ms（通知调度由上层负责，数据层只存列）。
   Future<Todo> create({
     required String title,
     String? note,
     String? date,
     int? dueAt,
     String? goalLink,
+    String? repeatRule,
+    int? remindAt,
+    String? rruleAnchorDate,
   }) async {
     final stamp = await _clock.next();
     final id = generateUuidV7();
+    // 锚点缺省口径：有 RRULE 且未显式给锚点 → 锚点=计划日（DTSTART 语义）。
+    final effectiveAnchor =
+        rruleAnchorDate ?? (repeatRule != null ? date : null);
     await _db.transaction(() async {
       await _db.into(_db.todos).insert(
             TodosCompanion.insert(
@@ -56,6 +75,9 @@ class TodoDao {
               date: Value(date),
               doneAt: const Value(null),
               dueAt: Value(dueAt),
+              repeatRule: Value(repeatRule),
+              remindAt: Value(remindAt),
+              rruleAnchorDate: Value(effectiveAnchor),
               goalLink: Value(goalLink),
               // 非空无默认列在 Companion.insert 中取裸值（Value 只用于
               // 可空/带默认列，§5.1 公共列均为非空无默认）。
@@ -106,10 +128,15 @@ class TodoDao {
     });
   }
 
-  /// 更新基础字段（标题/备注/计划日/截止/目标联动）。
+  /// 更新基础字段（标题/备注/计划日/截止/目标联动/重复规则/提醒）。
   ///
   /// 传 [_unchanged] 哨兵表示「不改动」；显式传 null 表示置空。计划日变更
   /// 时新旧两日的投影都要重算（§5.6 重建规则）。
+  ///
+  /// W13 重复字段语义（§5.5⑩）：[repeatRule]/[rruleAnchorDate]/[remindAt]
+  /// 各自独立、互不联动——清空 repeat_rule 不隐式清锚点（锚点是否随 series
+  /// 语义调整由上层决定）；改计划日不隐式平移锚点（实例展开口径由上层按
+  /// RFC5545 处理）。
   Future<void> updateDetails({
     required String id,
     Object? title = _unchanged,
@@ -117,6 +144,9 @@ class TodoDao {
     Object? date = _unchanged,
     Object? dueAt = _unchanged,
     Object? goalLink = _unchanged,
+    Object? repeatRule = _unchanged,
+    Object? remindAt = _unchanged,
+    Object? rruleAnchorDate = _unchanged,
   }) {
     return _db.transaction(() async {
       final row = await (_db.select(_db.todos)
@@ -141,6 +171,15 @@ class TodoDao {
           goalLink: goalLink == _unchanged
               ? const Value.absent()
               : Value(goalLink as String?),
+          repeatRule: repeatRule == _unchanged
+              ? const Value.absent()
+              : Value(repeatRule as String?),
+          remindAt: remindAt == _unchanged
+              ? const Value.absent()
+              : Value(remindAt as int?),
+          rruleAnchorDate: rruleAnchorDate == _unchanged
+              ? const Value.absent()
+              : Value(rruleAnchorDate as String?),
           updatedAt: Value(stamp.updatedAtMs),
           hlc: Value(stamp.hlc),
           revision: Value(row.revision + 1),
@@ -227,4 +266,30 @@ class TodoDao {
 
   /// updateDetails 的「不改动」哨兵。
   static const Object _unchanged = Object();
+}
+
+/// v1 内补列幂等回填（§6.4「行级 schema_ver 只加列前向兼容」的落点；W13）。
+///
+/// todos.rrule_anchor_date（RRULE 展开锚点日，DTSTART 语义）为 schema v1
+/// 冻结后的只加列变更：**schemaVersion 保持 1**，旧 v1 库文件不触发
+/// onUpgrade——在 beforeOpen 按 `PRAGMA table_info` 探测缺列并
+/// `ALTER TABLE ADD COLUMN rrule_anchor_date TEXT NULL` 补齐（可空加列无
+/// 默认值问题，与 backfillAttachmentBurnColumns 的 burned_at 同口径）。
+/// rrule 本体（repeat_rule）§5.5⑩ 冻结清单已有列，无需补列。
+///
+/// 新库（onCreate createAll）已含本列 → 本函数幂等 no-op。取舍说明：V1 未
+/// 发布（§11.2 W16 才商店发布）、冻结期禁破坏性迁移（§6.4），故选择
+/// 「v1 内补列+幂等回填」——无版本号变化、无破坏性、对存量开发库文件自愈。
+Future<void> backfillTodoRruleAnchorColumn(AppDatabase db) async {
+  final info = await db.customSelect('PRAGMA table_info(todos)').get();
+  if (info.isEmpty) {
+    return; // 表不存在（onCreate 前的异常时序）：交给建表流程
+  }
+  final columns = info.map((row) => row.data['name'] as String).toSet();
+  if (columns.contains('rrule_anchor_date')) {
+    return; // 新库已含本列：幂等 no-op
+  }
+  await db.customStatement(
+    'ALTER TABLE todos ADD COLUMN rrule_anchor_date TEXT NULL',
+  );
 }

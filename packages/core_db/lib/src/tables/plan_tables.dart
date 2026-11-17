@@ -136,10 +136,18 @@ class Todos extends Table with SyncColumns {
   /// 截止时刻 UTC ms。
   IntColumn get dueAt => integer().nullable()();
 
-  /// RRULE（RFC5545，P1）。
+  /// RRULE（RFC5545，P1；W13 起启用，§11.2 W13 主线）。
   TextColumn get repeatRule => text().nullable()();
 
-  /// 提醒时刻（P1）。
+  /// RRULE 展开锚点日 `yyyy-MM-dd`（DTSTART 语义；W13 v1 内补列，§6.4）。
+  ///
+  /// §5.5⑩ 冻结字段清单只有 repeat_rule；重复待办的实例日期=RRULE 自锚点日
+  /// 展开，「从哪天开始算」必须显式落列。与 attachments 即焚两列同口径：
+  /// schemaVersion 保持 1，旧 v1 库文件由 [backfillTodoRruleAnchorColumn]
+  /// （dao/todo_dao.dart）幂等补列，新库 createAll 已含本列、回填为 no-op。
+  TextColumn get rruleAnchorDate => text().nullable()();
+
+  /// 提醒时刻（P1；W13 起启用）。
   IntColumn get remindAt => integer().nullable()();
 
   /// → savings_goals / fitness_plans（联动）。多态引用（目标可指向两类
@@ -204,6 +212,16 @@ class SavingsContributions extends Table with SyncColumns {
 
   /// 备注。
   TextColumn get note => text().nullable()();
+
+  /// 贡献来源 `manual` / `todo`（W13 v1 内补列，§6.4 只加列）。
+  ///
+  /// §5.5⑫ 冻结清单未含来源；W13 待办联动打卡（§3.6「待办完成可选生成
+  /// 存钱贡献」，todos.goal_link → savings_goals）需与人工投币区分，且
+  /// 贡献追加按 (goal_id, date, source) 幂等去重。列默认 'manual'：补列时
+  /// 存量行视为人工打卡；与 attachments.status 同口径，schemaVersion 保持
+  /// 1，旧 v1 库文件由 [backfillSavingsContributionSourceColumn]
+  /// （dao/savings_dao.dart）幂等补列。
+  TextColumn get source => text().withDefault(const Constant('manual'))();
 
   @override
   Set<Column> get primaryKey => {id};

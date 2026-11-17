@@ -1,11 +1,16 @@
-/// 待办页（§3.6 待办基础 P0、§5.5⑩ todos、§11.1 W5-6 主线任务 2）。
+/// 待办页（§3.6 待办基础 P0 + 待办完整版 P1（W13）、§5.5⑩ todos、
+/// §11.1 W5-6 主线任务 2、§11.2 W13 主线「待办完整版（RRULE+提醒）」）。
 ///
-/// 双视图（§3.6）：今日待办（date=今天）与收集箱（date IS NULL）；
-/// 勾选经 [PlanGateway.setTodoDone]（done_at 只前进合并，§6.5）→ 同事务
-/// 重算 day_summary.todo_done/todo_total（§5.6）。
+/// 双视图（§3.6）：今日待办（date=今天）与收集箱（date IS NULL）。
+/// W13 起今日视图读**当日实例流**（[todoDayInstancesProvider]）：非重复行
+/// date=当日直出；重复待办按 anchor 展开命中当日的虚拟实例——查询时展开、
+/// 不预生成行（取舍见 rrule.dart 文档注释）；勾选经
+/// [PlanGateway.setTodoDone] 作用于基行（done_at 只前进合并 §6.5），同事务
+/// 重算 day_summary.todo_done/todo_total（§5.6，锚点日即基行 date）。
 ///
-/// 复用既有抽象：核心 CRUD 全部走 core_db `TodoDao`（经网关代理，§10.4），
-/// 本页只做视图编排，不重复实现任何合并/投影语义。
+/// 编辑入口：点瓦片或「详细」按钮 → [TodoEditorSheet]（标题/备注/重复规则
+/// （每天/每周 X/每月 X 日/自定义间隔 N 天）/提醒时刻）；提醒只落 remind_at
+/// 字段，真实通知由壳层调度（§3.6 P1，feature 层不触通知通道）。
 library;
 
 import 'package:core_db/core_db.dart' as cdb;
@@ -15,13 +20,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ui_kit/ui_kit.dart';
 
 import '../plan_gateway.dart';
+import '../plan_models.dart';
 import '../plan_providers.dart';
+import '../widgets/todo_editor_sheet.dart';
 
 /// 新增输入框测试锚点。
 const Key todoInputKey = ValueKey('todo_input');
 
 /// 新增按钮测试锚点。
 const Key todoAddKey = ValueKey('todo_add');
+
+/// 详细编辑按钮测试锚点（打开 W13 编辑抽屉）。
+const Key todoAdvancedKey = ValueKey('todo_advanced');
 
 /// 勾选框测试锚点（`todo_check_$todoId`）。
 Key todoCheckKey(String todoId) => ValueKey('todo_check_$todoId');
@@ -66,14 +76,28 @@ class _TodoPageState extends ConsumerState<TodoPage> {
         .createTodo(title: title, date: _view == _TodoView.today ? _today : null);
   }
 
+  /// 打开 W13 编辑抽屉（§3.6）：[todo] 非空=编辑基行；空=新建
+  /// （今日视图挂当日计划日、收集箱挂 null，§5.5⑩）。
+  void _openEditor({cdb.Todo? todo}) {
+    showSlimcaSpringSheet<void>(
+      context: context,
+      builder: (_) => TodoEditorSheet(
+        todo: todo,
+        planDate: todo != null
+            ? null
+            : (_view == _TodoView.today ? _today : null),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final tokens = context.slimca;
     // Riverpod 3 读态约定（与 capture_page 同口径）：.value + null 骨架帧。
-    final todos = _view == _TodoView.today
-        ? ref.watch(todayTodosProvider(_today)).value
-        : ref.watch(inboxTodosProvider).value;
-    final summary = ref.watch(planDaySummaryProvider(_today)).value;
+    // W13：今日视图读当日实例流（重复待办查询时展开，§3.6/§11.2 W13）。
+    final instances = _view == _TodoView.today
+        ? ref.watch(todoDayInstancesProvider(_today)).value
+        : ref.watch(todoDayInstancesProvider(null)).value;
 
     return Scaffold(
       appBar: AppBar(title: const Text('待办')),
@@ -92,10 +116,10 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                   setState(() => _view = selection.first),
             ),
             const SizedBox(height: 12),
-            if (_view == _TodoView.today && summary != null)
+            if (instances != null)
               Text(
-                '已完成 ${summary.todoDone}/${summary.todoTotal}'
-                '（§5.6 投影）',
+                '已完成 ${instances.where((t) => t.done).length}/${instances.length}'
+                '（§3.6 W13 当日实例口径）',
                 style:
                     TextStyle(fontSize: 13, color: tokens.onSurfaceMuted),
               ),
@@ -131,6 +155,12 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                IconButton(
+                  key: todoAdvancedKey,
+                  tooltip: '详细（重复/提醒，§3.6 W13）',
+                  onPressed: () => _openEditor(),
+                  icon: const Icon(Icons.tune),
+                ),
                 IconButton.filled(
                   key: todoAddKey,
                   tooltip: '添加',
@@ -141,9 +171,9 @@ class _TodoPageState extends ConsumerState<TodoPage> {
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: todos == null
+              child: instances == null
                   ? const Center(child: CircularProgressIndicator())
-                  : todos.isEmpty
+                  : instances.isEmpty
                       ? Center(
                           child: Text(
                             _view == _TodoView.today
@@ -155,11 +185,15 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                           ),
                         )
                       : ListView.separated(
-                          itemCount: todos.length,
+                          itemCount: instances.length,
                           separatorBuilder: (_, __) =>
                               const SizedBox(height: 8),
-                          itemBuilder: (context, index) =>
-                              _TodoTile(todo: todos[index], view: _view),
+                          itemBuilder: (context, index) => _TodoTile(
+                            instance: instances[index],
+                            view: _view,
+                            onEdit: () => _openEditor(
+                                todo: instances[index].todo),
+                          ),
                         ),
             ),
           ],
@@ -169,18 +203,25 @@ class _TodoPageState extends ConsumerState<TodoPage> {
   }
 }
 
-/// 单条待办瓦片：勾选联动投影（§5.6 todo_done）、删除=墓碑（§5.1）、
-/// 收集箱项可「加入今日」（§3.6）。
+/// 单条待办实例瓦片（§3.6 W13）：勾选联动投影（§5.6 todo_done）、删除=
+/// 基行墓碑（§5.1）、收集箱项可「加入今日」（§3.6）、重复实例展示规则
+/// 摘要 + 提醒角标；点标题进编辑抽屉（重复/提醒，§3.6 完整版）。
 class _TodoTile extends ConsumerWidget {
-  const _TodoTile({required this.todo, required this.view});
+  const _TodoTile({
+    required this.instance,
+    required this.view,
+    required this.onEdit,
+  });
 
-  final cdb.Todo todo;
+  final TodoDayInstance instance;
   final _TodoView view;
+  final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tokens = context.slimca;
-    final done = todo.doneAt != null;
+    final todo = instance.todo;
+    final done = instance.done;
     final gateway = ref.read(planGatewayProvider);
     return Material(
       color: tokens.surfaceMuted,
@@ -196,16 +237,47 @@ class _TodoTile extends ConsumerWidget {
                   gateway.setTodoDone(todo.id, done: value ?? false),
             ),
             Expanded(
-              child: Text(
-                todo.title,
-                style: TextStyle(
-                  fontSize: 15,
-                  color: done ? tokens.onSurfaceMuted : tokens.onSurface,
-                  decoration: done ? TextDecoration.lineThrough : null,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: onEdit,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        todo.title,
+                        style: TextStyle(
+                          fontSize: 15,
+                          color:
+                              done ? tokens.onSurfaceMuted : tokens.onSurface,
+                          decoration:
+                              done ? TextDecoration.lineThrough : null,
+                        ),
+                      ),
+                      if (instance.recurring || todo.remindAt != null)
+                        Row(
+                          children: [
+                            if (instance.recurring)
+                              Text(
+                                '${instance.repeatLabel ?? '重复'}（§5.5⑩）',
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: tokens.onSurfaceMuted),
+                              ),
+                            if (instance.recurring && todo.remindAt != null)
+                              const SizedBox(width: 6),
+                            if (todo.remindAt != null)
+                              Icon(Icons.alarm,
+                                  size: 13, color: tokens.onSurfaceMuted),
+                          ],
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
-            if (view == _TodoView.inbox && !done)
+            if (view == _TodoView.inbox && !done && !instance.recurring)
               TextButton(
                 key: todoMoveTodayKey(todo.id),
                 onPressed: () => gateway.moveTodoToToday(todo.id,

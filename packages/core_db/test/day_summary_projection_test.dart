@@ -218,7 +218,9 @@ void main() {
 
         expect(summary.dirty, isFalse, reason: '重算后 dirty 复位（§5.6）');
         expect(summary.builtAt, greaterThan(0));
-        expect(summary.savingsProgress, isNull, reason: '§5.6⑬：P1 存钱上线前恒 NULL');
+        expect(summary.savingsProgress, isNull,
+            reason: '§5.6⑬ W13 实装：本场景无当日有效目标 → 快照保持 NULL'
+                '（专项对账见 savings_projection_test）');
         expect(jsonDecode(summary.budgetSnapshot), {'daily': []},
             reason: '未建预算时快照为空集（§5.6⑬ budget_snapshot）');
         expect(summary.tzOffsetMin, 480, reason: '§5.1：取当日事件行时区');

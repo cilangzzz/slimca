@@ -37,11 +37,50 @@ final inboxTodosProvider =
   return gateway.watchInboxTodos();
 });
 
-/// 存钱目标视图流（§5.5⑪⑫：目标 + Σ贡献进度；W13 前恒空列表）。
+/// 存钱目标视图流（§5.5⑪⑫：目标 + Σ贡献进度；W13 打卡写路径上线，
+/// 联查 readsFrom 双表 reactive 刷新——见 plan_gateway.watchSavingsGoalViews）。
 final savingsGoalsProvider =
     StreamProvider.autoDispose<List<SavingsGoalView>>((ref) {
   final gateway = ref.watch(planGatewayProvider);
   return gateway.watchSavingsGoalViews();
+});
+
+/// 单目标流（W13 目标详情页，§3.6）。
+final savingsGoalDetailProvider =
+    StreamProvider.autoDispose.family<cdb.SavingsGoal?, String>((ref, id) {
+  final gateway = ref.watch(planGatewayProvider);
+  return gateway.watchGoalById(id);
+});
+
+/// 单目标进度求和流（§5.5⑫「进度=Σ贡献行」；详情页进度环/达成判定）。
+final savingsGoalProgressProvider =
+    StreamProvider.autoDispose.family<int, String>((ref, goalId) {
+  final gateway = ref.watch(planGatewayProvider);
+  return gateway.watchGoalProgress(goalId);
+});
+
+/// 目标贡献历史流（§3.6 目标详情「贡献历史」，append-only 时间线）。
+final savingsGoalContributionsProvider = StreamProvider.autoDispose
+    .family<List<cdb.SavingsContribution>, String>((ref, goalId) {
+  final gateway = ref.watch(planGatewayProvider);
+  return gateway.watchContributionsByGoal(goalId);
+});
+
+/// 目标当日人工投币行流（§3.6 投币打卡「状态防重复」：非空=今日已投币）。
+/// family key 为 (goalId, date) 记录（结构相等，Dart 3 record 语义）。
+final todayManualContributionProvider = StreamProvider.autoDispose
+    .family<cdb.SavingsContribution?, (String, String)>((ref, key) {
+  final gateway = ref.watch(planGatewayProvider);
+  final (goalId, date) = key;
+  return gateway.watchTodayManualContribution(goalId: goalId, date: date);
+});
+
+/// 某日待办实例流（§3.6 待办完整版 W13：查询时按 anchor 展开当日实例、
+/// 不预生成行——[date] null=收集箱基行直出）。
+final todoDayInstancesProvider = StreamProvider.autoDispose
+    .family<List<TodoDayInstance>, String?>((ref, date) {
+  final gateway = ref.watch(planGatewayProvider);
+  return gateway.watchTodoDayInstances(date);
 });
 
 /// 健身计划流（§5.5⑧；W14 前恒空列表）。

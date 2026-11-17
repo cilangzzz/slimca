@@ -79,6 +79,14 @@ dependencies:
   #   未提供，dart-define 注入、缺省离线桩，remaining：待凭据联调）。
   http: ^1.2.0
 
+  # W13 本地通知接线（§11.2 W13 任务 3）：flutter_local_notifications——
+  #   待办提醒真实通道（Android 13+ POST_NOTIFICATIONS 运行时请求在
+  #   FlutterLocalReminderScheduler 内接线，真机验收 remaining）；
+  # timezone——zonedSchedule 的 TZDateTime 绝对瞬间构造（remind_at=UTC ms
+  #   口径，与设备时区无关，§5.5⑩）。
+  flutter_local_notifications: ^19.0.0
+  timezone: ^0.10.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

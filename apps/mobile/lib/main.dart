@@ -62,6 +62,12 @@ Future<void> main() async {
   // 本地优先：start() 内部吞掉分区异常，绝不阻塞 UI（§6.1 原则 1）。
   WidgetsBinding.instance.addObserver(SyncLifecycleObserver(runtime.syncCoordinator));
   unawaited(runtime.syncCoordinator.start());
+
+  // ── W13 提醒调度启动（§11.2 W13 任务 3）：订阅 todos（remind_at 非空）
+  // watch 流，按展开实例调度本地通知（重复待办逐实例一条；Android 13+
+  // POST_NOTIFICATIONS 运行时请求在适配器 start 内一次性发起）。对账失败
+  // 静默自愈（§6.1 本地优先，绝不阻塞 UI）。
+  unawaited(runtime.reminderCoordinator.start());
 }
 
 /// 应用根：ProviderScope + MaterialApp.router（§10.1 技术选型）。

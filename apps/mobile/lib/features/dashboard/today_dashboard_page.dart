@@ -1,5 +1,6 @@
 import 'dart:ui' show clampDouble;
 
+import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -235,7 +236,7 @@ class _CardWall extends ConsumerWidget {
         const SizedBox(height: 12),
         SlimcaStaggerItem(index: 2, child: _TodoCard(todos: todos)),
         const SizedBox(height: 12),
-        SlimcaStaggerItem(index: 3, child: const _SavingsCard()),
+        SlimcaStaggerItem(index: 3, child: _SavingsCard(date: date)),
         const SizedBox(height: 12),
         SlimcaStaggerItem(index: 4, child: _TodayEntriesCard(day: day)),
         const SizedBox(height: 16),
@@ -452,26 +453,119 @@ class _TodoCard extends StatelessWidget {
   }
 }
 
-/// 存钱进度卡（§3.2 卡片墙第 5 项「上线后自动接入」、§3.6 存钱目标 P1）。
-class _SavingsCard extends StatelessWidget {
-  const _SavingsCard();
+/// 存钱进度卡（§3.2 卡片墙第 5 项「上线后自动接入」、§3.6 存钱目标 P1
+/// 留存钩子、§5.6⑬ savings_progress 快照、§11.2 W13 任务 2）。
+///
+/// - 数据：day_summary 投影流直读（dashboardSavingsProgressProvider，
+///   快照直出、零业务查询 §3.2；写路径同事务联动 → 投币后数字即时变化）；
+/// - 空态：无当日有效目标（快照 NULL/空 Map）→ 引导去计划页建档
+///   （任务 2「空态=无目标引导创建」）；多目标渲染聚合计（Σ贡献/Σ目标）。
+class _SavingsCard extends ConsumerWidget {
+  const _SavingsCard({required this.date});
+
+  /// 归属日 `yyyy-MM-dd`（§5.1）。
+  final String date;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tokens = context.slimca;
     final textTheme = Theme.of(context).textTheme;
+    final progress = ref.watch(dashboardSavingsProgressProvider(date)).value ??
+        const <String, db.SavingsProgressEntry>{};
+
+    if (progress.isEmpty) {
+      return _DashboardCard(
+        child: Row(
+          children: [
+            Icon(
+              Icons.savings_outlined,
+              color: tokens.onSurfaceMuted,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('存钱', style: textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Text(
+                    '还没有存钱目标。去「计划」页新建目标，'
+                    '投币打卡攒起来（§3.6 存钱目标）',
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: tokens.onSurfaceMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 多目标聚合计（§5.6⑬ 快照为多目标 JSON：Σ贡献 / Σ目标）。
+    var contributed = 0;
+    var target = 0;
+    for (final entry in progress.values) {
+      contributed += entry.contributedMinor;
+      target += entry.targetMinor;
+    }
+    final percent = target <= 0
+        ? 0
+        : ((contributed / target).clamp(0.0, 1.0) * 100).round();
+
     return _DashboardCard(
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.savings_outlined,
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('存钱', style: textTheme.titleMedium),
+              if (progress.length > 1)
+                Text(
+                  '${progress.length} 个目标',
+                  style: textTheme.labelMedium?.copyWith(
+                    color: tokens.onSurfaceMuted,
+                  ),
+                ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              '存钱目标上线后自动接入卡片墙（§3.2，P1）',
-              style: textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+          const SizedBox(height: 8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                yuanFromMinor(contributed),
+                style: textTheme.headlineSmall?.copyWith(
+                  color: tokens.moneyOut,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '/ ${yuanFromMinor(target)}（$percent%）',
+                style: textTheme.bodyMedium?.copyWith(
+                  color: tokens.onSurfaceMuted,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // 进度条随快照流推进（投币打卡→写事务重算快照→本卡即时变化，
+          // 任务 5「插目标+贡献→卡片数字变化」）。
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: target <= 0 ? 0.0 : contributed / target),
+              duration: MotionConfig.of(context).durM,
+              curve: Curves.easeOutCubic,
+              builder: (context, value, _) => LinearProgressIndicator(
+                value: clampDouble(value, 0.0, 1.0),
+                minHeight: 6,
+                backgroundColor: tokens.outline,
+                valueColor: AlwaysStoppedAnimation<Color>(tokens.moneyOut),
               ),
             ),
           ),

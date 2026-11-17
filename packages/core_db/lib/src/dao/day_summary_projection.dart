@@ -16,7 +16,12 @@
 /// - budget_snapshot：daily 预算（period_type='daily'，§5.4⑥）余量快照，
 ///   money 账本 used=当日支出、kcal 账本 used=kcal_in-kcal_out（§5.4 kcal
 ///   账本「预算=收入、吃=支出、运动=再入账」口径）；
-/// - savings_progress：P1 存钱上线后启用，v1 恒 NULL（§5.6⑬）；
+/// - savings_progress：W13 实装（§11.2 W13、§5.6⑬）——「当日有效目标」
+///   （status='active'、未墓碑、started_on <= 当日，且 deadline 为空或
+///   deadline >= 当日）逐一写 `{goal_id: {contributed_minor, target_minor}}`
+///   （多目标）；贡献为累计口径（date <= 当日，进度=Σ贡献行 §5.5⑫，历史日
+///   投影可随时重建且结果稳定）。无当日有效目标时保持 NULL（W1-W12 的
+///   「恒 NULL」旧行为即此空态）；
 /// - tz_offset_min：当日最近写入事件行的时区；无事件时沿用旧投影行，否则 0。
 library;
 
@@ -46,6 +51,7 @@ class DaySummaryProjection {
     final todos = await _aggregateTodos(date);
     final tz = await _resolveTz(date);
     final snapshot = await _budgetSnapshot(date);
+    final savings = await _savingsSnapshot(date);
 
     await _db.into(_db.daySummaries).insertOnConflictUpdate(
           DaySummariesCompanion.insert(
@@ -59,8 +65,11 @@ class DaySummaryProjection {
             todoDone: todos.done,
             todoTotal: todos.total,
             budgetSnapshot: jsonEncode(snapshot),
-            // P1 存钱上线后启用（§5.6⑬ savings_progress 行）。
-            savingsProgress: const Value(null),
+            // W13 实装（§5.6⑬ savings_progress 行）：无当日有效目标时保持
+            // NULL（空态与 W1-W12 恒 NULL 行为一致）。
+            savingsProgress: savings == null
+                ? const Value(null)
+                : Value(jsonEncode(savings)),
             builtAt: DateTime.now().millisecondsSinceEpoch,
             dirty: const Value(false),
           ),
@@ -84,6 +93,33 @@ class DaySummaryProjection {
     await (_db.update(_db.daySummaries)
           ..where((t) => t.date.equals(date)))
         .write(const DaySummariesCompanion(dirty: Value(true)));
+  }
+
+  /// 存钱快照联动标记（W13，§5.6⑬）：将**已含存钱进度**（savings_progress
+  /// 非空）的投影行标记 dirty，交 recomputeDirtyDays 后台自愈。
+  ///
+  /// - [fromDate] 缺省：全部进度行（目标有效性/目标金额/截止日变更可影响
+  ///   started_on 之后的任何一日快照）；
+  /// - [fromDate] 非空：仅 `date >= fromDate` 的进度行（贡献为累计口径
+  ///   date <= 快照日，追加只影响贡献日及其后）。
+  ///
+  /// 注意：本查询只扫进度非空行——首个目标建档前的 NULL 进度行覆盖不到，
+  /// 目标建档路径必须显式 recomputeDaySummary 当日（见 savings_dao.dart）。
+  Future<void> markSavingsProgressDirty({String? fromDate}) async {
+    if (fromDate == null) {
+      await _db.customUpdate(
+        'UPDATE day_summaries SET dirty = 1 '
+        'WHERE savings_progress IS NOT NULL',
+        updates: {_db.daySummaries},
+      );
+      return;
+    }
+    await _db.customUpdate(
+      'UPDATE day_summaries SET dirty = 1 '
+      'WHERE savings_progress IS NOT NULL AND date >= ?',
+      variables: [Variable.withString(fromDate)],
+      updates: {_db.daySummaries},
+    );
   }
 
   /// 只重算 dirty=1 的日期（§5.6「标记当日 dirty → 后台重算」的后台半步，
@@ -173,6 +209,52 @@ class DaySummaryProjection {
       total: row.read<int>('todo_total'),
       done: row.read<int>('todo_done'),
     );
+  }
+
+  /// 存钱进度快照（§5.6⑬ savings_progress，W13 实装）。
+  ///
+  /// 「当日有效目标」口径：status='active' 且未墓碑，且 started_on <= 当日，
+  /// 且 deadline 为空或 deadline >= 当日——当日仍在打卡窗口内的目标。
+  /// 进度=Σ贡献行（§5.5⑫），累计口径 date <= 当日（截至当日已存入：今日
+  /// 快照与进度卡全量进度一致；历史日投影重建结果稳定，不随后续打卡漂移）。
+  /// 金额单位分（§5.1 minor unit）。无有效目标返回 null（快照列保持 NULL）。
+  Future<Map<String, Object?>?> _savingsSnapshot(String date) async {
+    final goalRows = await _db
+        .customSelect(
+          'SELECT id, target_minor FROM savings_goals '
+          "WHERE status = 'active' AND deleted_at IS NULL "
+          'AND started_on <= ? AND (deadline IS NULL OR deadline >= ?) '
+          'ORDER BY started_on ASC, id ASC',
+          variables: [
+            Variable.withString(date),
+            Variable.withString(date),
+          ],
+        )
+        .get();
+    if (goalRows.isEmpty) {
+      return null;
+    }
+    final contributedRows = await _db
+        .customSelect(
+          'SELECT goal_id, COALESCE(SUM(amount_minor), 0) AS total '
+          'FROM savings_contributions '
+          'WHERE deleted_at IS NULL AND date <= ? GROUP BY goal_id',
+          variables: [Variable.withString(date)],
+        )
+        .get();
+    final contributedByGoal = <String, int>{
+      for (final row in contributedRows)
+        row.read<String>('goal_id'): row.read<int>('total'),
+    };
+    final snapshot = <String, Object?>{};
+    for (final goal in goalRows) {
+      final goalId = goal.read<String>('id');
+      snapshot[goalId] = <String, Object?>{
+        'contributed_minor': contributedByGoal[goalId] ?? 0,
+        'target_minor': goal.read<int>('target_minor'),
+      };
+    }
+    return snapshot;
   }
 
   /// tz 解析（§5.1 日期约定）：当日最近写入事件行的 tz_offset_min；
@@ -292,4 +374,39 @@ class DaySummaryProjection {
     }
     return <String, Object?>{'daily': items};
   }
+}
+
+/// savings_progress 快照条目（§5.6⑬ goal_id→{contributed_minor,target_minor}，
+/// W13 实装）：进度卡/进度环直读的已解包形状（contributed/target 单位为分）。
+typedef SavingsProgressEntry = ({int contributedMinor, int targetMinor});
+
+/// 解析 day_summary.savings_progress 快照 JSON（§5.6⑬ W13 实装形状）。
+///
+/// 上层（feature_dashboard/feature_plan）从 [DaySummary] 直读快照后经此
+/// 解包，零业务查询（§3.2）。防御性解析：坏 JSON、非对象、缺键、类型不符
+/// 的条目一律返回空/跳过而不抛错——快照是本地投影派生量，坏形状可整行
+/// 重建自愈（§5.6），不在此打断渲染。
+Map<String, SavingsProgressEntry> parseSavingsProgress(String json) {
+  final Object? raw;
+  try {
+    raw = jsonDecode(json);
+  } on FormatException {
+    return const {};
+  }
+  if (raw is! Map) {
+    return const {};
+  }
+  final result = <String, SavingsProgressEntry>{};
+  raw.forEach((goalId, value) {
+    if (goalId is String &&
+        value is Map &&
+        value['contributed_minor'] is int &&
+        value['target_minor'] is int) {
+      result[goalId] = (
+        contributedMinor: value['contributed_minor'] as int,
+        targetMinor: value['target_minor'] as int,
+      );
+    }
+  });
+  return result;
 }

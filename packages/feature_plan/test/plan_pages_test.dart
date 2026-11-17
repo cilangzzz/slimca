@@ -109,14 +109,15 @@ void main() {
       expect(find.text('健身手动记录'), findsOneWidget);
       expect(find.text('存钱目标'), findsOneWidget);
       expect(find.text('健身计划'), findsOneWidget);
-      // W13/W14 占位文案（§3.6/§3.5 P1 钩子）。
-      expect(find.text('W13 上线（§3.6 P1）'), findsOneWidget);
+      // W13 存钱主线已上线（§11.2 W13）；W14 健身计划仍占位（§3.5 P1）。
+      expect(find.text('365/52 周/自定义 + 投币打卡（§3.6）'), findsOneWidget);
       expect(find.text('W14 上线（§3.5 P1）'), findsOneWidget);
     },
   );
 
   testWidgets(
-    'SavingsPage 空态引导（W13 占位；读侧 reactive 流接通，§3.6/§5.5⑪⑫）',
+    'SavingsPage 空态引导（W13 全量：三种存钱法 + 投币打卡心智，'
+    '§3.6/§5.5⑪⑫/§11.2 W13）',
     (tester) async {
       final harness = _Harness();
       if (!await harness.init()) return;
@@ -126,10 +127,14 @@ void main() {
         tester,
         harness,
         const SavingsPage(),
-        waitFor: find.text('存钱目标 W13 上线'),
+        waitFor: find.text('开始你的第一个存钱目标'),
       );
-      expect(find.text('存钱目标 W13 上线'), findsOneWidget);
-      expect(find.textContaining('savings_goals'), findsOneWidget);
+      expect(find.text('开始你的第一个存钱目标'), findsOneWidget);
+      expect(find.textContaining('365 天挑战'), findsOneWidget);
+      expect(find.textContaining('append-only'), findsOneWidget);
+      // 新建目标入口（AppBar + 空态 CTA，§3.6）。
+      expect(find.byKey(savingsCreateKey), findsOneWidget);
+      expect(find.byKey(savingsEmptyCreateKey), findsOneWidget);
     },
   );
 

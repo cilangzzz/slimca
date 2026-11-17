@@ -5937,6 +5937,17 @@ class $TodosTable extends Todos with TableInfo<$TodosTable, Todo> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _rruleAnchorDateMeta = const VerificationMeta(
+    'rruleAnchorDate',
+  );
+  @override
+  late final GeneratedColumn<String> rruleAnchorDate = GeneratedColumn<String>(
+    'rrule_anchor_date',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _remindAtMeta = const VerificationMeta(
     'remindAt',
   );
@@ -5975,6 +5986,7 @@ class $TodosTable extends Todos with TableInfo<$TodosTable, Todo> {
     doneAt,
     dueAt,
     repeatRule,
+    rruleAnchorDate,
     remindAt,
     goalLink,
   ];
@@ -6085,6 +6097,15 @@ class $TodosTable extends Todos with TableInfo<$TodosTable, Todo> {
         repeatRule.isAcceptableOrUnknown(data['repeat_rule']!, _repeatRuleMeta),
       );
     }
+    if (data.containsKey('rrule_anchor_date')) {
+      context.handle(
+        _rruleAnchorDateMeta,
+        rruleAnchorDate.isAcceptableOrUnknown(
+          data['rrule_anchor_date']!,
+          _rruleAnchorDateMeta,
+        ),
+      );
+    }
     if (data.containsKey('remind_at')) {
       context.handle(
         _remindAtMeta,
@@ -6162,6 +6183,10 @@ class $TodosTable extends Todos with TableInfo<$TodosTable, Todo> {
         DriftSqlType.string,
         data['${effectivePrefix}repeat_rule'],
       ),
+      rruleAnchorDate: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}rrule_anchor_date'],
+      ),
       remindAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}remind_at'],
@@ -6222,10 +6247,18 @@ class Todo extends DataClass implements Insertable<Todo> {
   /// 截止时刻 UTC ms。
   final int? dueAt;
 
-  /// RRULE（RFC5545，P1）。
+  /// RRULE（RFC5545，P1；W13 起启用，§11.2 W13 主线）。
   final String? repeatRule;
 
-  /// 提醒时刻（P1）。
+  /// RRULE 展开锚点日 `yyyy-MM-dd`（DTSTART 语义；W13 v1 内补列，§6.4）。
+  ///
+  /// §5.5⑩ 冻结字段清单只有 repeat_rule；重复待办的实例日期=RRULE 自锚点日
+  /// 展开，「从哪天开始算」必须显式落列。与 attachments 即焚两列同口径：
+  /// schemaVersion 保持 1，旧 v1 库文件由 [backfillTodoRruleAnchorColumn]
+  /// （dao/todo_dao.dart）幂等补列，新库 createAll 已含本列、回填为 no-op。
+  final String? rruleAnchorDate;
+
+  /// 提醒时刻（P1；W13 起启用）。
   final int? remindAt;
 
   /// → savings_goals / fitness_plans（联动）。多态引用（目标可指向两类
@@ -6246,6 +6279,7 @@ class Todo extends DataClass implements Insertable<Todo> {
     this.doneAt,
     this.dueAt,
     this.repeatRule,
+    this.rruleAnchorDate,
     this.remindAt,
     this.goalLink,
   });
@@ -6277,6 +6311,9 @@ class Todo extends DataClass implements Insertable<Todo> {
     }
     if (!nullToAbsent || repeatRule != null) {
       map['repeat_rule'] = Variable<String>(repeatRule);
+    }
+    if (!nullToAbsent || rruleAnchorDate != null) {
+      map['rrule_anchor_date'] = Variable<String>(rruleAnchorDate);
     }
     if (!nullToAbsent || remindAt != null) {
       map['remind_at'] = Variable<int>(remindAt);
@@ -6311,6 +6348,9 @@ class Todo extends DataClass implements Insertable<Todo> {
       repeatRule: repeatRule == null && nullToAbsent
           ? const Value.absent()
           : Value(repeatRule),
+      rruleAnchorDate: rruleAnchorDate == null && nullToAbsent
+          ? const Value.absent()
+          : Value(rruleAnchorDate),
       remindAt: remindAt == null && nullToAbsent
           ? const Value.absent()
           : Value(remindAt),
@@ -6340,6 +6380,7 @@ class Todo extends DataClass implements Insertable<Todo> {
       doneAt: serializer.fromJson<int?>(json['doneAt']),
       dueAt: serializer.fromJson<int?>(json['dueAt']),
       repeatRule: serializer.fromJson<String?>(json['repeatRule']),
+      rruleAnchorDate: serializer.fromJson<String?>(json['rruleAnchorDate']),
       remindAt: serializer.fromJson<int?>(json['remindAt']),
       goalLink: serializer.fromJson<String?>(json['goalLink']),
     );
@@ -6362,6 +6403,7 @@ class Todo extends DataClass implements Insertable<Todo> {
       'doneAt': serializer.toJson<int?>(doneAt),
       'dueAt': serializer.toJson<int?>(dueAt),
       'repeatRule': serializer.toJson<String?>(repeatRule),
+      'rruleAnchorDate': serializer.toJson<String?>(rruleAnchorDate),
       'remindAt': serializer.toJson<int?>(remindAt),
       'goalLink': serializer.toJson<String?>(goalLink),
     };
@@ -6382,6 +6424,7 @@ class Todo extends DataClass implements Insertable<Todo> {
     Value<int?> doneAt = const Value.absent(),
     Value<int?> dueAt = const Value.absent(),
     Value<String?> repeatRule = const Value.absent(),
+    Value<String?> rruleAnchorDate = const Value.absent(),
     Value<int?> remindAt = const Value.absent(),
     Value<String?> goalLink = const Value.absent(),
   }) => Todo(
@@ -6399,6 +6442,9 @@ class Todo extends DataClass implements Insertable<Todo> {
     doneAt: doneAt.present ? doneAt.value : this.doneAt,
     dueAt: dueAt.present ? dueAt.value : this.dueAt,
     repeatRule: repeatRule.present ? repeatRule.value : this.repeatRule,
+    rruleAnchorDate: rruleAnchorDate.present
+        ? rruleAnchorDate.value
+        : this.rruleAnchorDate,
     remindAt: remindAt.present ? remindAt.value : this.remindAt,
     goalLink: goalLink.present ? goalLink.value : this.goalLink,
   );
@@ -6420,6 +6466,9 @@ class Todo extends DataClass implements Insertable<Todo> {
       repeatRule: data.repeatRule.present
           ? data.repeatRule.value
           : this.repeatRule,
+      rruleAnchorDate: data.rruleAnchorDate.present
+          ? data.rruleAnchorDate.value
+          : this.rruleAnchorDate,
       remindAt: data.remindAt.present ? data.remindAt.value : this.remindAt,
       goalLink: data.goalLink.present ? data.goalLink.value : this.goalLink,
     );
@@ -6442,6 +6491,7 @@ class Todo extends DataClass implements Insertable<Todo> {
           ..write('doneAt: $doneAt, ')
           ..write('dueAt: $dueAt, ')
           ..write('repeatRule: $repeatRule, ')
+          ..write('rruleAnchorDate: $rruleAnchorDate, ')
           ..write('remindAt: $remindAt, ')
           ..write('goalLink: $goalLink')
           ..write(')'))
@@ -6464,6 +6514,7 @@ class Todo extends DataClass implements Insertable<Todo> {
     doneAt,
     dueAt,
     repeatRule,
+    rruleAnchorDate,
     remindAt,
     goalLink,
   );
@@ -6485,6 +6536,7 @@ class Todo extends DataClass implements Insertable<Todo> {
           other.doneAt == this.doneAt &&
           other.dueAt == this.dueAt &&
           other.repeatRule == this.repeatRule &&
+          other.rruleAnchorDate == this.rruleAnchorDate &&
           other.remindAt == this.remindAt &&
           other.goalLink == this.goalLink);
 }
@@ -6504,6 +6556,7 @@ class TodosCompanion extends UpdateCompanion<Todo> {
   final Value<int?> doneAt;
   final Value<int?> dueAt;
   final Value<String?> repeatRule;
+  final Value<String?> rruleAnchorDate;
   final Value<int?> remindAt;
   final Value<String?> goalLink;
   final Value<int> rowid;
@@ -6522,6 +6575,7 @@ class TodosCompanion extends UpdateCompanion<Todo> {
     this.doneAt = const Value.absent(),
     this.dueAt = const Value.absent(),
     this.repeatRule = const Value.absent(),
+    this.rruleAnchorDate = const Value.absent(),
     this.remindAt = const Value.absent(),
     this.goalLink = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -6541,6 +6595,7 @@ class TodosCompanion extends UpdateCompanion<Todo> {
     this.doneAt = const Value.absent(),
     this.dueAt = const Value.absent(),
     this.repeatRule = const Value.absent(),
+    this.rruleAnchorDate = const Value.absent(),
     this.remindAt = const Value.absent(),
     this.goalLink = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -6566,6 +6621,7 @@ class TodosCompanion extends UpdateCompanion<Todo> {
     Expression<int>? doneAt,
     Expression<int>? dueAt,
     Expression<String>? repeatRule,
+    Expression<String>? rruleAnchorDate,
     Expression<int>? remindAt,
     Expression<String>? goalLink,
     Expression<int>? rowid,
@@ -6585,6 +6641,7 @@ class TodosCompanion extends UpdateCompanion<Todo> {
       if (doneAt != null) 'done_at': doneAt,
       if (dueAt != null) 'due_at': dueAt,
       if (repeatRule != null) 'repeat_rule': repeatRule,
+      if (rruleAnchorDate != null) 'rrule_anchor_date': rruleAnchorDate,
       if (remindAt != null) 'remind_at': remindAt,
       if (goalLink != null) 'goal_link': goalLink,
       if (rowid != null) 'rowid': rowid,
@@ -6606,6 +6663,7 @@ class TodosCompanion extends UpdateCompanion<Todo> {
     Value<int?>? doneAt,
     Value<int?>? dueAt,
     Value<String?>? repeatRule,
+    Value<String?>? rruleAnchorDate,
     Value<int?>? remindAt,
     Value<String?>? goalLink,
     Value<int>? rowid,
@@ -6625,6 +6683,7 @@ class TodosCompanion extends UpdateCompanion<Todo> {
       doneAt: doneAt ?? this.doneAt,
       dueAt: dueAt ?? this.dueAt,
       repeatRule: repeatRule ?? this.repeatRule,
+      rruleAnchorDate: rruleAnchorDate ?? this.rruleAnchorDate,
       remindAt: remindAt ?? this.remindAt,
       goalLink: goalLink ?? this.goalLink,
       rowid: rowid ?? this.rowid,
@@ -6676,6 +6735,9 @@ class TodosCompanion extends UpdateCompanion<Todo> {
     if (repeatRule.present) {
       map['repeat_rule'] = Variable<String>(repeatRule.value);
     }
+    if (rruleAnchorDate.present) {
+      map['rrule_anchor_date'] = Variable<String>(rruleAnchorDate.value);
+    }
     if (remindAt.present) {
       map['remind_at'] = Variable<int>(remindAt.value);
     }
@@ -6705,6 +6767,7 @@ class TodosCompanion extends UpdateCompanion<Todo> {
           ..write('doneAt: $doneAt, ')
           ..write('dueAt: $dueAt, ')
           ..write('repeatRule: $repeatRule, ')
+          ..write('rruleAnchorDate: $rruleAnchorDate, ')
           ..write('remindAt: $remindAt, ')
           ..write('goalLink: $goalLink, ')
           ..write('rowid: $rowid')
@@ -10463,6 +10526,16 @@ class $SavingsContributionsTable extends SavingsContributions
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+    'source',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('manual'),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     createdAt,
@@ -10478,6 +10551,7 @@ class $SavingsContributionsTable extends SavingsContributions
     amountMinor,
     slot,
     note,
+    source,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -10587,6 +10661,12 @@ class $SavingsContributionsTable extends SavingsContributions
         note.isAcceptableOrUnknown(data['note']!, _noteMeta),
       );
     }
+    if (data.containsKey('source')) {
+      context.handle(
+        _sourceMeta,
+        source.isAcceptableOrUnknown(data['source']!, _sourceMeta),
+      );
+    }
     return context;
   }
 
@@ -10648,6 +10728,10 @@ class $SavingsContributionsTable extends SavingsContributions
         DriftSqlType.string,
         data['${effectivePrefix}note'],
       ),
+      source: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}source'],
+      )!,
     );
   }
 
@@ -10700,6 +10784,16 @@ class SavingsContribution extends DataClass
 
   /// 备注。
   final String? note;
+
+  /// 贡献来源 `manual` / `todo`（W13 v1 内补列，§6.4 只加列）。
+  ///
+  /// §5.5⑫ 冻结清单未含来源；W13 待办联动打卡（§3.6「待办完成可选生成
+  /// 存钱贡献」，todos.goal_link → savings_goals）需与人工投币区分，且
+  /// 贡献追加按 (goal_id, date, source) 幂等去重。列默认 'manual'：补列时
+  /// 存量行视为人工打卡；与 attachments.status 同口径，schemaVersion 保持
+  /// 1，旧 v1 库文件由 [backfillSavingsContributionSourceColumn]
+  /// （dao/savings_dao.dart）幂等补列。
+  final String source;
   const SavingsContribution({
     required this.createdAt,
     required this.updatedAt,
@@ -10714,6 +10808,7 @@ class SavingsContribution extends DataClass
     required this.amountMinor,
     this.slot,
     this.note,
+    required this.source,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -10737,6 +10832,7 @@ class SavingsContribution extends DataClass
     if (!nullToAbsent || note != null) {
       map['note'] = Variable<String>(note);
     }
+    map['source'] = Variable<String>(source);
     return map;
   }
 
@@ -10757,6 +10853,7 @@ class SavingsContribution extends DataClass
       amountMinor: Value(amountMinor),
       slot: slot == null && nullToAbsent ? const Value.absent() : Value(slot),
       note: note == null && nullToAbsent ? const Value.absent() : Value(note),
+      source: Value(source),
     );
   }
 
@@ -10779,6 +10876,7 @@ class SavingsContribution extends DataClass
       amountMinor: serializer.fromJson<int>(json['amountMinor']),
       slot: serializer.fromJson<int?>(json['slot']),
       note: serializer.fromJson<String?>(json['note']),
+      source: serializer.fromJson<String>(json['source']),
     );
   }
   @override
@@ -10798,6 +10896,7 @@ class SavingsContribution extends DataClass
       'amountMinor': serializer.toJson<int>(amountMinor),
       'slot': serializer.toJson<int?>(slot),
       'note': serializer.toJson<String?>(note),
+      'source': serializer.toJson<String>(source),
     };
   }
 
@@ -10815,6 +10914,7 @@ class SavingsContribution extends DataClass
     int? amountMinor,
     Value<int?> slot = const Value.absent(),
     Value<String?> note = const Value.absent(),
+    String? source,
   }) => SavingsContribution(
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -10829,6 +10929,7 @@ class SavingsContribution extends DataClass
     amountMinor: amountMinor ?? this.amountMinor,
     slot: slot.present ? slot.value : this.slot,
     note: note.present ? note.value : this.note,
+    source: source ?? this.source,
   );
   SavingsContribution copyWithCompanion(SavingsContributionsCompanion data) {
     return SavingsContribution(
@@ -10847,6 +10948,7 @@ class SavingsContribution extends DataClass
           : this.amountMinor,
       slot: data.slot.present ? data.slot.value : this.slot,
       note: data.note.present ? data.note.value : this.note,
+      source: data.source.present ? data.source.value : this.source,
     );
   }
 
@@ -10865,7 +10967,8 @@ class SavingsContribution extends DataClass
           ..write('date: $date, ')
           ..write('amountMinor: $amountMinor, ')
           ..write('slot: $slot, ')
-          ..write('note: $note')
+          ..write('note: $note, ')
+          ..write('source: $source')
           ..write(')'))
         .toString();
   }
@@ -10885,6 +10988,7 @@ class SavingsContribution extends DataClass
     amountMinor,
     slot,
     note,
+    source,
   );
   @override
   bool operator ==(Object other) =>
@@ -10902,7 +11006,8 @@ class SavingsContribution extends DataClass
           other.date == this.date &&
           other.amountMinor == this.amountMinor &&
           other.slot == this.slot &&
-          other.note == this.note);
+          other.note == this.note &&
+          other.source == this.source);
 }
 
 class SavingsContributionsCompanion
@@ -10920,6 +11025,7 @@ class SavingsContributionsCompanion
   final Value<int> amountMinor;
   final Value<int?> slot;
   final Value<String?> note;
+  final Value<String> source;
   final Value<int> rowid;
   const SavingsContributionsCompanion({
     this.createdAt = const Value.absent(),
@@ -10935,6 +11041,7 @@ class SavingsContributionsCompanion
     this.amountMinor = const Value.absent(),
     this.slot = const Value.absent(),
     this.note = const Value.absent(),
+    this.source = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   SavingsContributionsCompanion.insert({
@@ -10951,6 +11058,7 @@ class SavingsContributionsCompanion
     required int amountMinor,
     this.slot = const Value.absent(),
     this.note = const Value.absent(),
+    this.source = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : createdAt = Value(createdAt),
        updatedAt = Value(updatedAt),
@@ -10975,6 +11083,7 @@ class SavingsContributionsCompanion
     Expression<int>? amountMinor,
     Expression<int>? slot,
     Expression<String>? note,
+    Expression<String>? source,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -10991,6 +11100,7 @@ class SavingsContributionsCompanion
       if (amountMinor != null) 'amount_minor': amountMinor,
       if (slot != null) 'slot': slot,
       if (note != null) 'note': note,
+      if (source != null) 'source': source,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -11009,6 +11119,7 @@ class SavingsContributionsCompanion
     Value<int>? amountMinor,
     Value<int?>? slot,
     Value<String?>? note,
+    Value<String>? source,
     Value<int>? rowid,
   }) {
     return SavingsContributionsCompanion(
@@ -11025,6 +11136,7 @@ class SavingsContributionsCompanion
       amountMinor: amountMinor ?? this.amountMinor,
       slot: slot ?? this.slot,
       note: note ?? this.note,
+      source: source ?? this.source,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -11071,6 +11183,9 @@ class SavingsContributionsCompanion
     if (note.present) {
       map['note'] = Variable<String>(note.value);
     }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -11093,6 +11208,7 @@ class SavingsContributionsCompanion
           ..write('amountMinor: $amountMinor, ')
           ..write('slot: $slot, ')
           ..write('note: $note, ')
+          ..write('source: $source, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -19177,6 +19293,7 @@ typedef $$TodosTableCreateCompanionBuilder =
       Value<int?> doneAt,
       Value<int?> dueAt,
       Value<String?> repeatRule,
+      Value<String?> rruleAnchorDate,
       Value<int?> remindAt,
       Value<String?> goalLink,
       Value<int> rowid,
@@ -19197,6 +19314,7 @@ typedef $$TodosTableUpdateCompanionBuilder =
       Value<int?> doneAt,
       Value<int?> dueAt,
       Value<String?> repeatRule,
+      Value<String?> rruleAnchorDate,
       Value<int?> remindAt,
       Value<String?> goalLink,
       Value<int> rowid,
@@ -19277,6 +19395,11 @@ class $$TodosTableFilterComposer extends Composer<_$AppDatabase, $TodosTable> {
 
   ColumnFilters<String> get repeatRule => $composableBuilder(
     column: $table.repeatRule,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get rruleAnchorDate => $composableBuilder(
+    column: $table.rruleAnchorDate,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -19370,6 +19493,11 @@ class $$TodosTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get rruleAnchorDate => $composableBuilder(
+    column: $table.rruleAnchorDate,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get remindAt => $composableBuilder(
     column: $table.remindAt,
     builder: (column) => ColumnOrderings(column),
@@ -19434,6 +19562,11 @@ class $$TodosTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<String> get rruleAnchorDate => $composableBuilder(
+    column: $table.rruleAnchorDate,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<int> get remindAt =>
       $composableBuilder(column: $table.remindAt, builder: (column) => column);
 
@@ -19483,6 +19616,7 @@ class $$TodosTableTableManager
                 Value<int?> doneAt = const Value.absent(),
                 Value<int?> dueAt = const Value.absent(),
                 Value<String?> repeatRule = const Value.absent(),
+                Value<String?> rruleAnchorDate = const Value.absent(),
                 Value<int?> remindAt = const Value.absent(),
                 Value<String?> goalLink = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -19501,6 +19635,7 @@ class $$TodosTableTableManager
                 doneAt: doneAt,
                 dueAt: dueAt,
                 repeatRule: repeatRule,
+                rruleAnchorDate: rruleAnchorDate,
                 remindAt: remindAt,
                 goalLink: goalLink,
                 rowid: rowid,
@@ -19521,6 +19656,7 @@ class $$TodosTableTableManager
                 Value<int?> doneAt = const Value.absent(),
                 Value<int?> dueAt = const Value.absent(),
                 Value<String?> repeatRule = const Value.absent(),
+                Value<String?> rruleAnchorDate = const Value.absent(),
                 Value<int?> remindAt = const Value.absent(),
                 Value<String?> goalLink = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -19539,6 +19675,7 @@ class $$TodosTableTableManager
                 doneAt: doneAt,
                 dueAt: dueAt,
                 repeatRule: repeatRule,
+                rruleAnchorDate: rruleAnchorDate,
                 remindAt: remindAt,
                 goalLink: goalLink,
                 rowid: rowid,
@@ -21194,6 +21331,7 @@ typedef $$SavingsContributionsTableCreateCompanionBuilder =
       required int amountMinor,
       Value<int?> slot,
       Value<String?> note,
+      Value<String> source,
       Value<int> rowid,
     });
 typedef $$SavingsContributionsTableUpdateCompanionBuilder =
@@ -21211,6 +21349,7 @@ typedef $$SavingsContributionsTableUpdateCompanionBuilder =
       Value<int> amountMinor,
       Value<int?> slot,
       Value<String?> note,
+      Value<String> source,
       Value<int> rowid,
     });
 
@@ -21285,6 +21424,11 @@ class $$SavingsContributionsTableFilterComposer
 
   ColumnFilters<String> get note => $composableBuilder(
     column: $table.note,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get source => $composableBuilder(
+    column: $table.source,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -21362,6 +21506,11 @@ class $$SavingsContributionsTableOrderingComposer
     column: $table.note,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get source => $composableBuilder(
+    column: $table.source,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$SavingsContributionsTableAnnotationComposer
@@ -21413,6 +21562,9 @@ class $$SavingsContributionsTableAnnotationComposer
 
   GeneratedColumn<String> get note =>
       $composableBuilder(column: $table.note, builder: (column) => column);
+
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
 }
 
 class $$SavingsContributionsTableTableManager
@@ -21471,6 +21623,7 @@ class $$SavingsContributionsTableTableManager
                 Value<int> amountMinor = const Value.absent(),
                 Value<int?> slot = const Value.absent(),
                 Value<String?> note = const Value.absent(),
+                Value<String> source = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => SavingsContributionsCompanion(
                 createdAt: createdAt,
@@ -21486,6 +21639,7 @@ class $$SavingsContributionsTableTableManager
                 amountMinor: amountMinor,
                 slot: slot,
                 note: note,
+                source: source,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -21503,6 +21657,7 @@ class $$SavingsContributionsTableTableManager
                 required int amountMinor,
                 Value<int?> slot = const Value.absent(),
                 Value<String?> note = const Value.absent(),
+                Value<String> source = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => SavingsContributionsCompanion.insert(
                 createdAt: createdAt,
@@ -21518,6 +21673,7 @@ class $$SavingsContributionsTableTableManager
                 amountMinor: amountMinor,
                 slot: slot,
                 note: note,
+                source: source,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

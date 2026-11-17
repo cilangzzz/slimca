@@ -69,10 +69,10 @@ class PlanHubPage extends ConsumerWidget {
             index: 2,
             child: _HubCard(
               icon: Icons.savings_outlined,
-              accent: tokens.moneyOut,
+              accent: tokens.moneyIn,
               title: '存钱目标',
               subtitle: (goals == null || goals.isEmpty)
-                  ? 'W13 上线（§3.6 P1）'
+                  ? '365/52 周/自定义 + 投币打卡（§3.6）'
                   : '${goals.length} 个目标进行中',
               onTap: () => _push(context, const SavingsPage()),
             ),

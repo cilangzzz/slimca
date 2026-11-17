@@ -14,7 +14,14 @@
 /// - 拍照通道（W11-12，§11.2 主线）：`AttachmentsDao`——附件引用登记与
 ///   「解析后即焚」状态机（active→burned 单向、>7 天残留强制清理，§5.6㉑/
 ///   §3.3）；`FoodItemsDao`——菜品明细 CRUD 与按 entry 查询（§5.2③，写
-///   路径同事务入队 outbox 与 §6.2 纪律同口径）。
+///   路径同事务入队 outbox 与 §6.2 纪律同口径）；
+/// - 存钱目标（W13，§11.2 主线「待办完整版+存钱目标」）：`SavingsGoalsDao`/
+///   `SavingsContributionsDao`——目标 CRUD 与归档（软删）、贡献 append-only
+///   追加（幂等按 goal+date+source，§5.5⑫/§6.1）、按目标求和进度；
+///   `DaySummaryProjection` 的 savings_progress 快照实装（§5.6⑬，
+///   goal_id→{contributed_minor,target_minor} 多目标）与
+///   `parseSavingsProgress` 解包辅助；`TodoDao` 增补重复规则三字段
+///   （repeat_rule/rrule_anchor_date/remind_at，§5.5⑩）。
 library;
 
 export 'src/app_database.dart';
@@ -27,6 +34,7 @@ export 'src/dao/entry_repository.dart';
 export 'src/dao/food_items_dao.dart';
 export 'src/dao/ledger_dao.dart';
 export 'src/dao/local_write_clock.dart';
+export 'src/dao/savings_dao.dart';
 export 'src/dao/sync_outbox_writer.dart';
 export 'src/dao/todo_dao.dart';
 export 'src/tables/event_tables.dart';

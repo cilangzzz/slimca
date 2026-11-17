@@ -24,6 +24,10 @@ import 'package:feature_sync/feature_sync.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/drift_repositories.dart';
+import '../data/savings_service.dart';
+import '../notifications/flutter_local_reminder_scheduler.dart'
+    show FlutterLocalReminderScheduler;
+import '../notifications/reminder_scheduler.dart' show ReminderScheduler;
 import '../settings/raw_input_setting.dart';
 import '../sync/sync_backend_factory.dart';
 import '../sync/sync_coordinator.dart';
@@ -71,8 +75,58 @@ final entryLineRepositoryProvider = Provider<EntryLineRepository>((ref) {
 /// TodoDao 内部经 LocalWriteClock 惰性解析 device_id/HLC（core_db，§6.3）：
 /// 与 bootstrap() 写入 settings 的同一 device_id 键（kSettingDeviceId），
 /// 全库共享同一设备标识。
+///
+/// W13：DAO 挂投影（§5.6 重建规则「业务行 + 投影同事务」）——待办增改删
+/// 联动重算当日 day_summary（todo_done/todo_total），与 feature_plan 网关
+/// 装配口径一致。
 final todoDaoProvider = Provider<db.TodoDao>((ref) {
-  return db.TodoDao(ref.watch(appDatabaseProvider));
+  return db.TodoDao(
+    ref.watch(appDatabaseProvider),
+    projection: ref.watch(daySummaryProjectionProvider),
+  );
+});
+
+// ── W13 装配（§11.2 W13：待办完整版+存钱目标+本地通知）────────────────
+
+/// day_summary 投影单例（§5.6⑬；仪表盘/存钱卡快照直出与写路径同事务联动
+/// 共用同一实例）。
+final daySummaryProjectionProvider = Provider<db.DaySummaryProjection>((ref) {
+  return db.DaySummaryProjection(ref.watch(appDatabaseProvider));
+});
+
+/// 存钱目标 DAO provider（§5.5⑪；W13 写路径同事务联动投影 savings_progress）。
+final savingsGoalsDaoProvider = Provider<db.SavingsGoalsDao>((ref) {
+  return db.SavingsGoalsDao(
+    ref.watch(appDatabaseProvider),
+    projection: ref.watch(daySummaryProjectionProvider),
+  );
+});
+
+/// 存钱贡献 DAO provider（§5.5⑫ append-only；同事务联动投影）。
+final savingsContributionsDaoProvider =
+    Provider<db.SavingsContributionsDao>((ref) {
+  return db.SavingsContributionsDao(
+    ref.watch(appDatabaseProvider),
+    projection: ref.watch(daySummaryProjectionProvider),
+  );
+});
+
+/// 存钱写路径服务（§3.6 目标建档+投币打卡；W13 漏斗埋点在服务内）。
+final savingsServiceProvider = Provider<SavingsService>((ref) {
+  return SavingsService(
+    goalsDao: ref.watch(savingsGoalsDaoProvider),
+    contributionsDao: ref.watch(savingsContributionsDaoProvider),
+    telemetry: ref.watch(telemetryServiceProvider),
+  );
+});
+
+/// 提醒调度器注入点（§11.2 W13 任务 3，§10.4 壳负责装配）。
+///
+/// 缺省 = [FlutterLocalReminderScheduler]（真实通道；平台交互惰性初始化，
+/// 构造零副作用）。测试一律 override 记录型 Fake（FakeReminderScheduler，
+/// 禁真实通知/平台通道）。
+final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
+  return FlutterLocalReminderScheduler();
 });
 
 // ── W7-8 装配（§11.1：遥测 / raw_input 开关 / 计费 / 同步）────────────────

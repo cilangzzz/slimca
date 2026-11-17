@@ -10,6 +10,8 @@ import 'package:drift_flutter/drift_flutter.dart';
 
 import 'dao/attachments_dao.dart' show backfillAttachmentBurnColumns;
 import 'dao/default_seed.dart';
+import 'dao/savings_dao.dart' show backfillSavingsContributionSourceColumn;
+import 'dao/todo_dao.dart' show backfillTodoRruleAnchorColumn;
 import 'tables/event_tables.dart';
 import 'tables/infra_tables.dart';
 import 'tables/ledger_tables.dart';
@@ -78,6 +80,13 @@ class AppDatabase extends _$AppDatabase {
           // schema 就绪先行，再跑 seed（seed 行不触 attachments，但次序上
           // 「先补列后写数据」是迁移惯例）。
           await backfillAttachmentBurnColumns(this);
+          // §11.2 W13：todos.rrule_anchor_date（RRULE 展开锚点）与
+          // savings_contributions.source（贡献来源，打卡幂等键三元组）为
+          // v1 内补列（§6.4 只加列、schemaVersion 保持 1）——旧 v1 库文件
+          // 幂等补齐，新库 createAll 已含、回填 no-op（取舍见各回填函数
+          // 文档）。次序沿用「先补列后写数据」惯例。
+          await backfillTodoRruleAnchorColumn(this);
+          await backfillSavingsContributionSourceColumn(this);
           // §5.4/§11.1 W2：空库首次打开 seed 默认数据（幂等）——默认 money
           // 账本 + 内置 kcal 账本 + 20+ 中文分类 + settings（device_id/
           // default_ledger_id），详见 dao/default_seed.dart。

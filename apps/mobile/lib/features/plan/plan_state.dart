@@ -1,4 +1,4 @@
-/// 计划 Tab 数据流（§4.2「待办 / 健身 / 存钱三卡」、§3.5/§3.6、§5.5⑦⑩）。
+/// 计划 Tab 数据流（§4.2「待办 / 健身 / 存钱三卡」、§3.5/§3.6、§5.5⑦⑩⑪⑫）。
 ///
 /// 设计决策（与 dashboard_state.dart 同一纪律）：
 /// - 一切围绕仪表盘当前选中日（selectedDateProvider，§3.2「一切围绕日期」）：
@@ -6,7 +6,8 @@
 /// - 聚合从明细/真值行 reactive stream 重建（§6.1 原则 3「投影不同步、从明细
 ///   重建」），任一行变更即重发——「记一笔健身→仪表盘运动条即时更新」的
 ///   数据底座（§11.1 W5-6 验收线）；
-/// - 墓碑行不参与（§5.1 删除行）；存钱目标 P1 未上线（§3.6，卡片渲染占位）。
+/// - 墓碑行不参与（§5.1 删除行）；存钱目标 W13 上线（§3.6 P1 留存钩子，
+///   §11.2 W13）：打卡中目标 + Σ贡献进度 reactive 流直驱存钱卡。
 library;
 
 import 'package:core_db/core_db.dart' as db;
@@ -60,5 +61,69 @@ final bodyWeightKgProvider = StreamProvider<double>((ref) {
     );
     if (value == null || value <= 0 || value > 500) return kDefaultBodyWeightKg;
     return value;
+  });
+});
+
+// ── W13 存钱目标流（§3.6 存钱目标 P1、§5.5⑪⑫、§11.2 W13）────────────────
+
+/// 存钱卡目标视图：打卡中目标 + Σ贡献进度（§5.5⑫「进度=贡献行求和」）。
+class PlanSavingsGoalView {
+  const PlanSavingsGoalView({
+    required this.goal,
+    required this.contributedMinor,
+  });
+
+  /// 目标行（§5.5⑪，status='active' 且未墓碑）。
+  final db.SavingsGoal goal;
+
+  /// 已存入金额（分；Σ contributions 未墓碑行，append-only 口径 §6.1）。
+  final int contributedMinor;
+
+  /// 进度 0..1（target=0 防御为 0，不除零 §7.4）。
+  double get progress {
+    if (goal.targetMinor <= 0) return 0;
+    return (contributedMinor / goal.targetMinor).clamp(0.0, 1.0).toDouble();
+  }
+}
+
+/// 打卡中目标 + 进度流（计划 Tab 存钱卡数据源；§11.2 W13）。
+///
+/// 触发查询同时 readsFrom 两张真值表（§5.5⑪⑫）：目标增删改或贡献 append
+/// 任一变更即重发；每次重发从明细行一次性重建视图（§6.1 原则 3「聚合从
+/// 明细行重建」）——目标行取完整行类，贡献按目标分组求和（未墓碑行，与
+/// SavingsContributionsDao.sumByGoal 同口径）。
+final planSavingsGoalsProvider =
+    StreamProvider.autoDispose<List<PlanSavingsGoalView>>((ref) {
+  final database = ref.watch(appDatabaseProvider);
+  return database
+      .customSelect(
+        'SELECT 1 AS alive',
+        readsFrom: {database.savingsGoals, database.savingsContributions},
+      )
+      .watch()
+      .asyncMap((_) async {
+    final goals = await (database.select(database.savingsGoals)
+          ..where((t) =>
+              t.status.equals(db.kSavingsGoalStatusActive) &
+              t.deletedAt.isNull())
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .get();
+    final sumRows = await database
+        .customSelect(
+          'SELECT goal_id, COALESCE(SUM(amount_minor), 0) AS total '
+          'FROM savings_contributions WHERE deleted_at IS NULL GROUP BY goal_id',
+        )
+        .get();
+    final contributedByGoal = <String, int>{
+      for (final row in sumRows)
+        row.read<String>('goal_id'): row.read<int>('total'),
+    };
+    return <PlanSavingsGoalView>[
+      for (final goal in goals)
+        PlanSavingsGoalView(
+          goal: goal,
+          contributedMinor: contributedByGoal[goal.id] ?? 0,
+        ),
+    ];
   });
 });
