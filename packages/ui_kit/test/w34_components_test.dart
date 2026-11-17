@@ -43,8 +43,7 @@ void main() {
         ),
       );
       // 首帧：呼吸相位 0 → 透明度处于下限（0.55）
-      final Opacity start =
-          tester.widget<Opacity>(find.byType(Opacity).first);
+      final Opacity start = tester.widget<Opacity>(find.byType(Opacity).first);
       expect(start.opacity, closeTo(0.55, 0.01));
 
       // 推进半周期（整周期 = 4 × dur.l = 1120ms）→ 相位 0.5 → 明显回升
@@ -75,8 +74,9 @@ void main() {
       );
       // pumpAndSettle 可收敛 = 无 repeat 循环（降级关键断言）
       await tester.pumpAndSettle();
-      final Opacity settled =
-          tester.widget<Opacity>(find.byType(Opacity).first);
+      final Opacity settled = tester.widget<Opacity>(
+        find.byType(Opacity).first,
+      );
       expect(settled.opacity, 1.0);
       expect(find.text('parsing'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -112,8 +112,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final Opacity settled =
-          tester.widget<Opacity>(find.byType(Opacity).first);
+      final Opacity settled = tester.widget<Opacity>(
+        find.byType(Opacity).first,
+      );
       expect(settled.opacity, 1.0);
       expect(tester.takeException(), isNull);
     });
@@ -254,14 +255,17 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final TextStyle expense = tester.widget<Text>(
-        find.byType(Text).first,
-      ).style!;
-      expect(expense.color, SlimcaTheme.light.moneyOut);
-      final TextStyle income = tester.widget<Text>(
-        find.byType(Text).last,
-      ).style!;
-      expect(income.color, SlimcaTheme.light.moneyIn);
+      // buildTheme 出口过 §8.3 AA 护栏：W1 基线中浅色 moneyIn（tone≈70）对
+      // 白卡不达 4.5:1，装配时自动降级到最近安全 tone；静态基线零漂移不回写。
+      final SlimcaTheme guarded = enforceSlimcaAa(SlimcaTheme.light);
+      final TextStyle expense = tester
+          .widget<Text>(find.byType(Text).first)
+          .style!;
+      expect(expense.color, guarded.moneyOut);
+      final TextStyle income = tester
+          .widget<Text>(find.byType(Text).last)
+          .style!;
+      expect(income.color, guarded.moneyIn);
     });
 
     testWidgets('业务 style 自带 color 时不覆盖', (tester) async {
@@ -279,8 +283,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final TextStyle style =
-          tester.widget<Text>(find.byType(Text)).style!;
+      final TextStyle style = tester.widget<Text>(find.byType(Text)).style!;
       expect(style.color, const Color(0xFF123456));
     });
   });
@@ -342,7 +345,9 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('sweepEntrance=false 目标变化仍 spring 续播（§2.3 步骤 4）', (tester) async {
+    testWidgets('sweepEntrance=false 目标变化仍 spring 续播（§2.3 步骤 4）', (
+      tester,
+    ) async {
       Widget host(int kcalIn) => MaterialApp(
         theme: fullTheme,
         home: Scaffold(

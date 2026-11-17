@@ -19,8 +19,16 @@
 ///   组装（§5.2③，联查钩子 [DishRefLookup] 留接口）、dart-define 装配工厂
 ///   （SLIMCA_BAIDU_* / SLIMCA_AI_*，缺省 Fake——真实凭据待联调）；
 /// - 四级降级接口（§7.4：一级内建于 StructuredFailure，二三四级留接口）；
-/// - 确定性 Fake（FakeLlmAdapter / FakeAiParser / FakeDishAdapter，测试与
-///   预览用）；
+/// - 端侧小票 OCR（§11.2 W16 主线、§10.1 OCR 行「ML Kit/Vision 端侧——不
+///   传原图」、§3.7 端侧优先「OCR 全端侧，仅用户确认后才走云解析或直接
+///   落库——不自动上云」）：ReceiptOcrAdapter 抽象（图片字节→ReceiptDraft
+///   商户/合计/时间/明细行）、端侧字段抽取器（纯 Dart 保守正则，不猜——
+///   宁缺不错）、ML Kit/Vision 平台通道适配器骨架（通道桥注入；native
+///   handler 待壳层接线，remaining 真机验收）、FakeReceiptOcrAdapter
+///   （fixture，默认 mock）、ReceiptDraft→结构化文本→复用既有 AiParser
+///   文本管线（单边 money，§3.3）的衔接管线与 dart-define 装配工厂；
+/// - 确定性 Fake（FakeLlmAdapter / FakeAiParser / FakeDishAdapter /
+///   FakeReceiptOcrAdapter，测试与预览用）；
 /// - 缺省离线桩（HeuristicFakeLlmAdapter：正则抽取产 §7.2 受约束 JSON，
 ///   宿主未配 API key 时经 LlmAiParser 走完整管线的「默认 mock」，§11.1）。
 ///
@@ -36,6 +44,7 @@ export 'src/degrade/degrade_hooks.dart';
 export 'src/fake/fake_adapter.dart';
 export 'src/fake/fake_dish_adapter.dart';
 export 'src/fake/fake_parser.dart';
+export 'src/fake/fake_receipt_ocr_adapter.dart';
 export 'src/fake/heuristic_fake_adapter.dart';
 export 'src/llm/llm_adapter.dart';
 export 'src/llm/openai_adapter.dart';
@@ -50,3 +59,11 @@ export 'src/photo/photo_factory.dart';
 export 'src/photo/photo_models.dart';
 export 'src/photo/photo_parser.dart';
 export 'src/photo/vision_dish_adapter.dart';
+export 'src/receipt/platform_receipt_ocr_adapters.dart';
+export 'src/receipt/receipt_factory.dart';
+export 'src/receipt/receipt_field_extractor.dart';
+export 'src/receipt/receipt_models.dart';
+export 'src/receipt/receipt_ocr_adapter.dart';
+export 'src/receipt/receipt_ocr_channel.dart';
+export 'src/receipt/receipt_parser.dart';
+export 'src/receipt/receipt_text_bridge.dart';

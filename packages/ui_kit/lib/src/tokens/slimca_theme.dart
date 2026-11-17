@@ -83,12 +83,18 @@ class SlimcaTheme extends ThemeExtension<SlimcaTheme> {
   final double motionScale;
 
   /// 内置默认浅色语义 token（由第 1 层色板推导，§8.2 三层架构）。
+  ///
+  /// W1 基线零漂移承诺：本静态值 = `_fromPalette(defaults, light)` 原始推导
+  /// （外延 tone 如浅色 moneyIn/kcalOut ≈70 不达 AA 正文阈值是 W1 已知口径），
+  /// §8.3 WCAG AA 护栏在**装配层**执行（buildTheme / ThemeProfile.toSlimcaTheme
+  /// 出口自动降级到最近安全 tone），不回写本基线——壳层 theme_pack 复刻表
+  /// 与本值逐值相等（W16 零漂移测试锚点）。
   static final SlimcaTheme light = _fromPalette(
     SlimcaPalette.defaults,
     Brightness.light,
   );
 
-  /// 内置默认深色语义 token。
+  /// 内置默认深色语义 token（零漂移承诺同 [light]）。
   /// 注：AMOLED 纯黑（§8.3 曜黑）是独立开关的独立主题包，不在此默认值内。
   static final SlimcaTheme dark = _fromPalette(
     SlimcaPalette.defaults,
@@ -97,6 +103,15 @@ class SlimcaTheme extends ThemeExtension<SlimcaTheme> {
 
   static SlimcaTheme defaultFor(Brightness brightness) =>
       brightness == Brightness.dark ? dark : light;
+
+  /// 色板 → 语义 token 的推导入口（公开 W1 基线推导表，tone 选取遵循 M3
+  /// 明度惯例；供主题包层复用，替代壳层复刻副本）。
+  ///
+  /// 注意：本方法**不含** §8.3 WCAG AA 护栏——基线必须与 W1 静态值逐值一致
+  /// （零漂移）；护栏降级发生在 [enforceSlimcaAa]（buildTheme 与
+  /// ThemeProfile.toSlimcaTheme 装配出口调用）。
+  static SlimcaTheme fromPalette(SlimcaPalette p, Brightness brightness) =>
+      _fromPalette(p, brightness);
 
   /// 色板 → 语义 token 的默认推导（tone 选取遵循 M3 明度惯例）。
   static SlimcaTheme _fromPalette(SlimcaPalette p, Brightness brightness) {

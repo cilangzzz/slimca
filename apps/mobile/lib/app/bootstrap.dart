@@ -53,6 +53,8 @@ import '../sync/sync_backend_factory.dart';
 import '../sync/sync_coordinator.dart';
 import '../sync/telemetry_sync_backend.dart';
 import '../telemetry/telemetry.dart';
+import '../theme/theme_profiles.dart' show ensurePresetThemeProfiles;
+import '../theme/theme_settings.dart' show ThemeSettings, loadThemeSettings;
 import '../workout/flutter_local_workout_timer_notifier.dart';
 import '../workout/wakelock_plus_keep_awake.dart';
 import 'providers.dart';
@@ -106,6 +108,23 @@ Future<AppRuntime> bootstrap() async {
   // 实例——记一笔后当日 budget_snapshot/savings_progress 同事务重算，仪表盘
   // 支出卡预算余（W15 任务 2）与存钱进度卡读到的快照不再依赖旁路重算。
   final projection = db.DaySummaryProjection(database);
+
+  // ── W16 · 主题偏好预载（§11.2 W16 任务 2「当前 profile→buildTheme→
+  //    MaterialApp」）：启动期读 settings 表（§5.6⑲ 本地件：当前主题指针/
+  //    动效等级/深浅覆盖/dynamic 开关，坏值逐键自愈回落默认，§6.1）——经
+  //    initialThemeSettingsProvider override 注入，首帧即正确主题包、零闪跳
+  //    （§2.3 步 0；运行期写回由 ThemeSettingsController 负责）。
+  final ThemeSettings themeSettings = await loadThemeSettings(database);
+
+  // ── W16 · 内置主题包种子（§8.3「6 套内置包」、§5.6⑳ theme_profiles 一等
+  //    同步实体）：幂等写入 6 个 preset_* 行并同事务入队 outbox（§6.2 写路径
+  //    纪律，SyncOutboxWriter 统一落点）；失败不阻塞启动——网格回退静态规格
+  //    渲染，下轮启动重试（§6.1 降级纪律）。
+  try {
+    await ensurePresetThemeProfiles(database);
+  } on Object {
+    // 种子失败静默（编辑器网格仍有静态内置包兜底，§6.1）。
+  }
 
   // ── W7-8 · 遥测（§3.9）：本地 JSONL 落盘；装配失败回落 Noop（缺失只损
   // 失监控数据、不影响业务，§6.1 纪律）。路径 = 应用 support 目录/telemetry。
@@ -263,6 +282,9 @@ Future<AppRuntime> bootstrap() async {
       syncCoordinatorProvider.overrideWithValue(coordinator),
       // W13 提醒调度注入点（§11.2 任务 3）：真实通道适配器（测试注入 Fake）。
       reminderSchedulerProvider.overrideWithValue(reminderScheduler),
+      // W16 主题偏好初值注入（§11.2 W16 任务 2）：bootstrap 预载 settings
+      // （§5.6⑲），首帧即当前主题包、零闪跳（§2.3 步 0）。
+      initialThemeSettingsProvider.overrideWithValue(themeSettings),
       // W14 组间计时器底座注入点（§11.2 W14 任务 2）：唤醒锁 + 常驻计时通知
       // 真实适配器（测试注入 Fake；真实行为真机验收 remaining）。
       keepAwakeProvider.overrideWithValue(keepAwake),

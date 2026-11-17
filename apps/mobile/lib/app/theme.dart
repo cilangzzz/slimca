@@ -1,3 +1,7 @@
+/// W1 基线保留：[slimcaLightTheme]/[slimcaDarkTheme]（帧预算基准测试
+/// frame_budget_benchmark_test.dart 引用）= 默认包（墨）的缺省装配。
+library;
+
 import 'package:flutter/material.dart';
 import 'package:ui_kit/ui_kit.dart';
 
@@ -7,17 +11,22 @@ import 'package:ui_kit/ui_kit.dart';
 /// - 本文件是 apps/mobile 对 ui_kit 的**唯一引用点**（§10.4：壳负责装配）。
 ///   W1 骨架期若 ui_kit 的 `buildTheme` / `MotionConfig` 签名有出入，只需调整本文件。
 /// - 主题切换 = ColorScheme + ThemeExtension 全屏 morph（§8.3，转场 #10），
-///   由 ui_kit 内部实现，壳只按亮度取 ThemeData。
-/// - 深浅色跟随系统（§8.3），在 [main.dart] 的 MaterialApp.router 上分别注入。
+///   由 ui_kit [SlimcaThemeMorph] 实现（main.dart builder 内接线），
+///   本文件只按亮度装配目标 ThemeData。
+/// - 深浅色跟随系统 + 手动覆盖（§8.3）由 lib/theme/theme_providers.dart 的
+///   `slimcaThemeModeProvider` 给出 themeMode，MaterialApp 消费；W16 起主题
+///   包来自 theme_profiles（§5.6⑳），装配链（ThemeProfile.toSlimcaTheme →
+///   SlimcaDynamicThemeMapper → buildTheme，ui_kit 三步）见 theme_providers.dart。
 
 /// 浅色主题（§8.2 语义 token 与 §9.2 MotionConfig 由 ui_kit 挂进 ThemeData）。
 ///
 /// W1 约定的 ui_kit 签名：`buildTheme({required Brightness brightness})`，
-/// 默认主题包（墨/纸，§8.3 内置包）在 ui_kit 内部生效；主题编辑器（P1）落地后
-/// 此处改为从 theme_profiles 读取当前包（§5.6 ⑳）。
+/// 默认主题包（墨/纸，§8.3 内置包）在 ui_kit 内部生效；W16 起运行期主题
+/// 经 `slimcaLightThemeProvider`（theme_profiles 当前包）装配，本函数保留
+/// 为基准测试与降级路径的缺省装配点。
 ThemeData slimcaLightTheme() => buildTheme(brightness: Brightness.light);
 
-/// 深色主题（曜黑 AMOLED 纯黑独立开关，P1 接入，§8.3）。
+/// 深色主题（曜黑 AMOLED 纯黑随包 token 生效，§8.3）。
 ThemeData slimcaDarkTheme() => buildTheme(brightness: Brightness.dark);
 
 /// 共享轴转场时长：§9.2 dur.l = 280ms（抽屉 / 页面 / 共享轴）。

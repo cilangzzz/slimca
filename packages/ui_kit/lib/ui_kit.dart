@@ -10,6 +10,11 @@ export 'src/tokens/palette.dart';
 export 'src/tokens/slimca_theme.dart';
 export 'src/tokens/motion_config.dart';
 export 'src/tokens/build_theme.dart';
+// W16（§11.2）：WCAG AA 护栏 / 主题包模型与 6 内置包 / dynamic_color 适配
+export 'src/tokens/contrast.dart';
+export 'src/tokens/theme_profile.dart';
+export 'src/tokens/theme_presets.dart';
+export 'src/tokens/dynamic_color.dart';
 
 // ── P0 关键转场（§9.3 清单：#1 级联 / #2 共享轴 / #3 弹簧抽屉 /
 //    #4 count-up+环 sweep+置信度 pulse / #5 Hero 飞入 / #10 主题 morph）
@@ -26,3 +31,5 @@ export 'src/transitions/money_count_up.dart';
 // ── 语义组件（§3.2 核心视觉）─────────────────────────────────────
 export 'src/components/calorie_ring.dart';
 export 'src/components/confirm_card.dart';
+// W16（§8.4）：主题编辑器面板
+export 'src/components/theme_editor_panel.dart';

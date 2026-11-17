@@ -17,7 +17,14 @@
 ///   关=附件系统照常登记 burned，但登记焚毁前本机留档一份（photo_archive/，
 ///   仅设备本地、永不上传，见 lib/photo/photo_attachment_store.dart）。
 ///
-/// 主题编辑器、数据导出等仍为占位（§4.3 /settings/* 子路由后续接入）。
+/// W16 接入（§11.2 W16 任务 1/4/5、§8.3/§8.4）：
+/// - **主题编辑器入口**（ThemeEditorPanel 接入）：唤起主题编辑面板——6 包
+///   网格预览（当前高亮）+ dynamic_color 开关（默认关）+ 深浅覆盖 + 动效
+///   等级 + 自定义包保存往返（写入 theme_profiles，§5.6⑳）；
+/// - 打开即记 theme_editor_opened 漏斗（面板内切换记 theme_changed，§11.2
+///   W16 任务 5）。
+///
+/// 数据导出等仍为占位（§4.3 /settings/* 子路由后续接入）。
 library;
 
 import 'dart:async';
@@ -29,6 +36,11 @@ import '../../app/providers.dart';
 import '../../billing/billing_provider.dart';
 import '../../settings/photo_burn_setting.dart';
 import '../../settings/raw_input_setting.dart';
+import '../../telemetry/w16_funnel_events.dart';
+import 'theme_editor_panel.dart' show showThemeEditorPanel;
+
+/// 测试锚点：主题编辑器入口（§11.2 W16 任务 1）。
+const Key settingsThemeEntryKey = Key('settings_theme_entry');
 
 /// 测试锚点：raw_input 上云开关。
 const Key settingsRawInputSwitchKey = Key('settings_raw_input_switch');
@@ -154,6 +166,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final syncLabel = ref.watch(syncBackendLabelProvider);
+    // W16 主题入口副标题（当前包名 + 深浅模式；§8.3/§11.2 W16 任务 1）。
+    final themePackLabel = ref.watch(currentThemePackNameProvider);
+    final ThemeMode themeMode = ref.watch(slimcaThemeModeProvider);
+    final themeModeLabel = switch (themeMode) {
+      ThemeMode.system => '跟随系统',
+      ThemeMode.light => '浅色',
+      ThemeMode.dark => '深色',
+    };
     return Scaffold(
       appBar: AppBar(title: const Text('我的')),
       body: ListView(
@@ -205,11 +225,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             onRestore: _restore,
           ),
           const Divider(height: 1),
-          // ── 既有占位（§4.3 子路由后续接入）。
-          const ListTile(
-            leading: Icon(Icons.palette_outlined),
-            title: Text('主题'),
-            subtitle: Text('深浅色跟随系统（§8.3）· 主题编辑器 W8+ 接入'),
+          // ── 主题编辑器入口（§11.2 W16 任务 1「ThemeEditorPanel 接入」、
+          //    §8.3/§8.4）：唤起主题编辑面板（6 包网格预览+dynamic_color 开关+
+          //    深浅覆盖+动效等级+自定义包保存往返）；打开即记
+          //    theme_editor_opened 漏斗（§11.2 W16 任务 5）。
+          ListTile(
+            key: settingsThemeEntryKey,
+            leading: const Icon(Icons.palette_outlined),
+            title: const Text('主题'),
+            subtitle: Text(
+              '当前主题包：$themePackLabel · 深浅色'
+              '$themeModeLabel（§8.3）',
+            ),
+            onTap: () {
+              // W16 漏斗首步（theme_editor_opened，§11.2 W16 任务 5）。
+              unawaited(
+                ref
+                    .read(telemetryServiceProvider)
+                    .funnel(W16TelemetryFunnel.themeEditorOpened),
+              );
+              unawaited(showThemeEditorPanel(context));
+            },
           ),
           const ListTile(
             leading: Icon(Icons.ios_share_outlined),

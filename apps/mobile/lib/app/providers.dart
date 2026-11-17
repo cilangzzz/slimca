@@ -51,6 +51,22 @@ import '../workout/wakelock_plus_keep_awake.dart'
 
 export '../billing/billing_provider.dart' show billingServiceProvider;
 
+// ── W16 装配再导出（§11.2 W16 主题应用链路；页面/编辑器经本枢纽取依赖）────
+export '../theme/theme_providers.dart'
+    show
+        corePaletteLoaderProvider,
+        currentThemePackNameProvider,
+        initialThemeSettingsProvider,
+        platformCorePaletteProvider,
+        resolvedThemeProfileProvider,
+        slimcaDarkThemeProvider,
+        slimcaLightThemeProvider,
+        slimcaThemeModeProvider,
+        themeProfileRepositoryProvider,
+        themeProfilesStreamProvider,
+        themeSettingsControllerProvider,
+        ThemeSettingsController;
+
 /// 应用主库单例（§10.1 数据层选型 Drift）。
 ///
 /// 生产路径：缺省执行器 = core_db `driftDatabase('slimca')`（按平台落

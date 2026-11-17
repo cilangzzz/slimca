@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'contrast.dart';
 import 'motion_config.dart';
 import 'slimca_theme.dart';
 
@@ -9,6 +10,9 @@ import 'slimca_theme.dart';
 /// - ColorScheme 以 tokens.primary 为种子经 fromSeed 补齐 M3 派生槽位
 ///   （§8.3 dynamic_color 仅映射 primary/seed 两源、保品牌识别），再用语义 token
 ///   覆盖关键槽位，保「双主色锚定：绿是吃、橘是钱」（§8.2）；
+/// - WCAG AA 对比度护栏（§8.3/§8.4）：装配前对语义 token 组合做关键对校验，
+///   不达标自动降级到最近安全 tone（[enforceSlimcaAa]，幂等——内置主题包与
+///   ThemeProfile.toSlimcaTheme 产物已过护栏，此处为手写 token 的兜底闸门）；
 /// - 主题切换动画由 SlimcaThemeMorph 承担（§9.3#10），本函数只负责装配。
 ThemeData buildTheme({
   required Brightness brightness,
@@ -20,7 +24,10 @@ ThemeData buildTheme({
   /// 业务应传 `MotionConfig.forLevel(savedLevel, motionScale: savedScale)`。
   MotionConfig? motion,
 }) {
-  final SlimcaTheme tokens = semantic ?? SlimcaTheme.defaultFor(brightness);
+  // §8.3 护栏兜底：不达标关键对自动降级到最近安全 tone（幂等）。
+  final SlimcaTheme tokens = enforceSlimcaAa(
+    semantic ?? SlimcaTheme.defaultFor(brightness),
+  );
   final MotionConfig motionConfig =
       motion ?? MotionConfig.forLevel(MotionLevel.full);
 

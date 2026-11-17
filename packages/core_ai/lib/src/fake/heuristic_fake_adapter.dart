@@ -9,7 +9,8 @@
 /// 确定性纪律（测试可用）：同一输入恒产同一输出；无随机、无时钟、无网络。
 /// 抽取规则（原壳层 FakeParser 同款，§2.3 步 3「只求确认卡有真数据可改」）：
 /// - 热量：首个 `(\d{1,5})\s*(?:kcal|大卡|卡路里|卡)`，越界 [0,5000] 不产出；
-/// - 金额：首个 `花(了)?\s*N` / `N\s*(元|块)`（N 最多两位小数，元→分）。
+/// - 金额：首个 `花(了)?\s*N` / `N\s*(元|块)`（N 最多两位小数，元→分）；
+/// - 商户：首个「X」全角引号段（W16 小票衔接，§11.2；缺失即 null）。
 /// 无任何抽取 → lines 为空 → 校验器 emptyResult → 管线 StructuredFailure
 /// → 宿主降级手填（§7.4，与真实模型「解析不出」路径一致）。
 library;
@@ -47,6 +48,9 @@ class HeuristicFakeLlmAdapter implements LlmAdapter {
     final text = input ?? '';
     final kcal = _firstKcal(text);
     final amountMinor = _firstMoneyMinor(text);
+    // 商户名（§7.2 money 行 merchant 字段；W16 小票结构化文本形态
+    // 「在小票「X」消费…」——不命中即 null，自然语言输入行为向后兼容）。
+    final merchant = _firstMerchant(text);
     final lines = <Map<String, Object?>>[
       if (kcal != null)
         <String, Object?>{
@@ -65,12 +69,14 @@ class HeuristicFakeLlmAdapter implements LlmAdapter {
           'confidence': 0.93,
           'ledger_hint': 'default',
           'category_hint': '餐饮-正餐',
-          'merchant': null,
+          'merchant': merchant,
         },
     ];
     return LlmResponse(
       content: jsonEncode(<String, Object?>{
-        'title': text,
+        // 标题：商户名优先（小票形态的确认卡标题应可读，§7.3 title）；
+        // 否则保持既有行为（标题=输入原文）。
+        'title': merchant ?? text,
         'kind': _kind(lines),
         'parse_notes': _kParseNotes,
         'lines': lines,
@@ -94,6 +100,15 @@ class HeuristicFakeLlmAdapter implements LlmAdapter {
     if (hasKcal) return 'food';
     if (hasMoney) return 'expense';
     return 'note';
+  }
+
+  /// 商户名抽取（W16 小票衔接，§11.2）：首个全角引号「X」段（1-30 字）；
+  /// 无「」的输入返回 null——行为与既往版本一致（向后兼容）。
+  static String? _firstMerchant(String input) {
+    final match = RegExp(r'「([^「」]{1,30})」').firstMatch(input);
+    if (match == null) return null;
+    final name = match.group(1)!.trim();
+    return name.isEmpty ? null : name;
   }
 
   /// 热量抽取；越界 [0,5000] 不产出行（与 §7.1 校验器自洽）。

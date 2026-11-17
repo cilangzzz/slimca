@@ -108,6 +108,14 @@ dependencies:
   #   wakelock_plus ^1.4.0——Dart 3.8 兼容上限（1.5+ 需 Dart 3.10/Flutter 3.38）。
   wakelock_plus: ^1.4.0
 
+  # W16 主题系统接线（§11.2 W16、§8.2/§8.3）：
+  # material_color_utilities——CorePalette（§8.3 dynamic_color 两源映射的
+  #   平台取色类型，ui_kit CorePaletteLoader 契约）与测试合成取色
+  #   （CorePalette.of）；版本与 ui_kit 钉定一致。
+  #   （dynamic_color 插件通道由 ui_kit 承载——loadPlatformCorePalette，
+  #   壳层不再直依赖插件。）
+  material_color_utilities: ^0.11.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

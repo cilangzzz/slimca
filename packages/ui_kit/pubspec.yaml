@@ -13,6 +13,9 @@ dependencies:
     sdk: flutter
   # §8.2 第 1 层：种子色 → HCT tonal palette（版本与 Flutter 3.32 SDK 钉定版本一致）
   material_color_utilities: ^0.11.1
+  # §8.3 dynamic_color（Android 12+ Material You 平台取色；两源映射见
+  # src/tokens/dynamic_color.dart，不支持平台回退手动种子色）
+  dynamic_color: ^1.7.0
 
 dev_dependencies:
   flutter_test:

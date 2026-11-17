@@ -354,8 +354,10 @@ class MotionConfig extends ThemeExtension<MotionConfig> {
     );
   }
 
+  /// 缩放后按毫秒粒度取整（§9.2 时长 token 以整毫秒冻结；滑杆系数可为
+  /// 小数——168ms × 1.3 = 218.4 → 218ms，保证装配出的时长仍落在表值粒度）。
   static Duration _scale(Duration d, double f) =>
-      Duration(microseconds: (d.inMicroseconds * f).round());
+      Duration(milliseconds: (d.inMicroseconds * f / 1000).round());
 
   /// §9.2「用途」列 → token 的具名映射：业务按用途取值，防止错用时长档。
   Duration get microFeedback => durXs; // 微反馈（按压涟漪）
