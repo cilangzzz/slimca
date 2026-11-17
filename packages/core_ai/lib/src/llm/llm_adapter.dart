@@ -15,15 +15,58 @@ import 'dart:async';
 /// 消息角色（OpenAI chat/completions 协议）。
 enum LlmRole { system, user, assistant }
 
+/// 多模态内容段（§3.3 拍照通道 P1、§11.2 W11-12「拍照通道」：text +
+/// image_url 的 OpenAI 兼容 content 数组格式；Qwen-VL / GLM-4V 兼容端点
+/// 同构，§7.5）。
+///
+/// W3-4 文本通道只走纯文本 [LlmMessage.content]；照片通道以 [LlmMessage.parts]
+/// 携带图文多段 content，协议结构不变（本层 API 面向前兼容预留的兑现）。
+sealed class LlmContentPart {
+  const LlmContentPart();
+}
+
+/// 文本段（content 数组中的 {"type":"text"}）。
+final class LlmTextPart extends LlmContentPart {
+  const LlmTextPart(this.text);
+
+  final String text;
+}
+
+/// 图像段（content 数组中的 {"type":"image_url"}）。
+final class LlmImageUrlPart extends LlmContentPart {
+  const LlmImageUrlPart(this.url);
+
+  /// 图像引用：`data:image/jpeg;base64,…`（端侧压缩图内联，即用即焚不落档，
+  /// §3.3「原图解析后即焚不落存储」）或 https:// 图片地址。
+  final String url;
+}
+
 /// 一条对话消息。
 ///
-/// W3-4 文本通道只走纯文本；照片通道（P1，§3.3）届时以多段 content 扩展
-/// 本类（text + image_url），协议结构不变——本层 API 面向前兼容预留。
+/// 纯文本消息用 [LlmMessage] 主构造（[parts] 为空）；多模态消息用
+/// [LlmMessage.parts] 构造（此时 [content] 为空串，content 数组进 [parts]）。
 class LlmMessage {
-  const LlmMessage(this.role, this.content);
+  const LlmMessage(this.role, this.content) : parts = const [];
+
+  /// 多模态构造（§3.3 拍照通道：text + image_url 段序列，OpenAI 兼容协议
+  /// 的 content 数组载荷）。
+  ///
+  /// 非 const：[List.unmodifiable] 包装非法 const 值（const 构造仅纯文本
+  /// 主构造 [LlmMessage] 支持，多模态载荷本就含运行时图像数据）。
+  LlmMessage.parts(this.role, List<LlmContentPart> parts)
+      : content = '',
+        parts = List<LlmContentPart>.unmodifiable(parts);
 
   final LlmRole role;
+
+  /// 纯文本内容（[parts] 为空时有效）。
   final String content;
+
+  /// 多模态内容段（非空 = 走 content 数组序列化）。
+  final List<LlmContentPart> parts;
+
+  /// 是否多模态消息（序列化分支依据）。
+  bool get isMultimodal => parts.isNotEmpty;
 }
 
 /// 请求侧期望的受约束输出档位（§7.2 JSON Schema 受约束输出）。
@@ -141,6 +184,12 @@ class LlmResponse {
 /// [retryable] 供适配器/编排层判定是否值得重试；parse 层据此映射
 /// [StructuredFailure]（ai_parser.dart）。sealed：全部分类同库枚举，
 /// switch 穷尽由编译器保证，新增分类必然显式接入降级映射。
+///
+/// 分类体系同时被拍照通道的百度菜品识别 HTTP 适配器复用（§3.3 拍照通道、
+/// §11.2 W11-12）：百度是「OpenAI 风格无关」的 HTTP 客户端，但其错误面
+/// （超时/限流/额度/鉴权/坏响应）与本表一一对应——同一分类映射同一 §7.4
+/// 降级语义，拍照管线（photo_parser.dart）与文本管线（ai_parser.dart）
+/// 共用一张降级映射表。
 sealed class LlmException implements Exception {
   const LlmException(this.message, {this.cause});
 

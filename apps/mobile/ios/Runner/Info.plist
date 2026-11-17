@@ -43,6 +43,12 @@
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<!-- W11-12 拍照通道（§11.2 任务 1「权限与插件」、§3.3）：相机/相册用途
+	     描述（App Store 审核必填；文案说明即焚口径 §3.7）。 -->
+	<key>NSCameraUsageDescription</key>
+	<string>Slimca 需要使用相机拍摄食物照片进行热量识别（拍照通道）。原图仅用于本次识别，确认落库后立即删除，不落入存储（§3.7）。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Slimca 需要访问相册以选择食物照片进行热量识别（拍照通道）。原图仅用于本次识别，确认落库后立即删除，不落入存储（§3.7）。</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 </dict>

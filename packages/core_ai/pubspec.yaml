@@ -1,6 +1,6 @@
 name: core_ai
 resolution: workspace
-description: "Slimca AI 解析域：LLM adapter（OpenAI 兼容协议）+ 受约束 JSON 解析管线 + input_hash 缓存与四级降级接口（§7、§10.4 packages/core_ai）。"
+description: "Slimca AI 解析域：LLM adapter（OpenAI 兼容协议）+ 受约束 JSON 解析管线 + input_hash 缓存与四级降级接口 + 拍照通道（端侧压缩/百度菜品识别/Vision LLM 双供应商 fallback，§7、§10.4、§11.2 W11-12）。"
 version: 0.0.1
 publish_to: none
 homepage:
@@ -26,6 +26,9 @@ dependencies:
   http: ^1.2.0
   # §7.1「规范化 + input_hash（sha256）」：缓存键计算。
   crypto: ^3.0.0
+  # §3.3 拍照通道「端侧压缩（长边 1280、JPEG q80）」：纯 Dart 图片编解码
+  # （W11-12；无平台通道，测试离线可跑真实 codec）。
+  image: ^4.5.0
 
 dev_dependencies:
   flutter_test:

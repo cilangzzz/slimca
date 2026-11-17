@@ -214,3 +214,38 @@ $listed
 
 请严格按系统提示中的 JSON Schema 修正后重新输出完整 JSON（不要复述错误、不要输出 JSON 以外的任何文字）。''';
 }
+
+/// 拍照通道系统提示词（§3.3「Vision LLM 兜底」、§11.2 W11-12；VisionLlmDishAdapter
+/// 的 vision 请求载荷）。
+///
+/// 口径与文本版 [buildSystemPrompt] 对齐（§7.2 受约束 JSON、kcal 整数
+/// [0,5000]、confidence ∈ [0,1]），差异：
+/// - 输入是图片：识别照片中的可见菜品并逐一拆 items（§7.1 红线「LLM 直报
+///   热量不可信」——模型只提供初值，落库前必经食物库联查校准，联查钩子见
+///   photo_parser.dart [DishRefLookup]）；
+/// - 拍照通道恒只产热量行（单边 kcal 口径，§3.3；schema 用
+///   `buildParseJsonSchema(ParseMode.kcalOnly)`）；
+/// - 无金额/日期语义（raw_input 即用即焚，§3.3）。
+String buildPhotoSystemPrompt({Iterable<String> presetCategories = kDefaultPresetCategoryNames}) {
+  final categories = presetCategories.join('、');
+  return '''
+你是 Slimca 的拍照识别引擎。识别照片中所有可见的菜品（含主食与饮品），输出「一件事」的结构化 JSON。只输出 JSON 本体，禁止输出任何解释文字、前后缀或 markdown 代码块。
+
+输出字段：
+- title：整餐一句话描述（不超过 20 字）。
+- kind：恒为 "food"。
+- lines：恰好一个热量行：{"type":"calorie","amount_kcal":整数,"confidence":0到1,"category_hint":"内置分类名","items":[{"name":"菜品名","portion_g":克数估计,"kcal":整数,"protein_g":0,"carb_g":0,"fat_g":0,"ref_source":"llm","confidence":0到1}]}
+- parse_notes：一句话识别依据（可省略）。
+
+硬规则：
+1. 只识别食物菜品，逐菜品拆分 items；照片中没有可识别菜品时输出 items 为空数组且 amount_kcal=0。
+2. amount_kcal 与每项 kcal 一律整数，范围 [0,5000]；portion_g 必须为正数（按常见份量估计）。
+3. confidence 是你对这一估计的确信程度，取值 [0,1]：照片份量估算通常 0.4-0.6；每个 items 元素也给出 confidence。
+4. category_hint 优先从内置分类枚举选择：$categories；没有合适枚举时才给自定义词。
+5. ref_source 无把握时填 "llm"；热量只按可见份量估初值，禁止虚高精度。
+6. 每行必填 confidence，缺失会导致输出被整体拒绝。
+
+示例（一碗牛肉面的照片）：
+{"title":"牛肉拉面","kind":"food","lines":[{"type":"calorie","amount_kcal":500,"confidence":0.55,"category_hint":"餐饮-面食","items":[{"name":"牛肉拉面","portion_g":450,"kcal":500,"protein_g":25,"carb_g":65,"fat_g":12,"ref_source":"llm","confidence":0.55}]}],"parse_notes":"份量按中碗估计"}
+''';
+}

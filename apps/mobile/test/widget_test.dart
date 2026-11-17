@@ -4,8 +4,9 @@
 //
 // 覆盖链路（§4.2 壳 + §9.3#3 录入抽屉 + §6.2 写路径 + §3.3 语音通道）：
 // 冷启动首帧直出仪表盘（无 spinner §2.3 步 0）→ 4 Tab 导航壳（§4.2）→
-// 中央「+」弹簧抽屉（W5-6：写/说/拍三通道，写=feature_capture CapturePage
-// 唯一录入 UI，说=语音面板 W5-6 Fake 链路，拍=P1 禁用 §3.3）→ 单边开关
+// 中央「+」弹簧抽屉（W5-6 三通道 + W11-12 拍照段启用 §11.2：写=
+// feature_capture CapturePage 唯一录入 UI，说=语音面板 W5-6 Fake 链路，
+// 拍=拍照面板 W11-12 Fake 注入链路）→ 单边开关
 // 「仅记钱」手动填表保存 → entries/entry_lines 落库 → 仪表盘明细流实时重发；
 // W3-4：AI 一句话输入 → 缺省装配（dart-define 工厂无 key → core_ai
 // HeuristicFakeLlmAdapter 完整管线，零真实网络）→ 确认卡 → 确认入账 →
@@ -236,10 +237,11 @@ void main() {
     expect(find.text('500'), findsOneWidget, reason: '热量环心净 kcal=500');
 
     // ── W5-6：录入通道抽屉「说/拍」段（§3.3 三通道；语音链路 e2e 见
-    //    e2e_voice_capture_test.dart，此处核对通道切换与缺省「写」档）──
+    //    e2e_voice_capture_test.dart、拍照链路 e2e 见
+    //    e2e_photo_capture_test.dart，此处核对通道切换与缺省「写」档）──
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pumpAndSettle();
-    // 写（缺省）= CapturePage 渲染；说/拍 = W5-6 通道位。
+    // 写（缺省）= CapturePage 渲染；说/拍 = 通道位（拍段 W11-12 启用）。
     expect(find.byKey(const Key('capture_channel_text')), findsOneWidget);
     expect(find.byKey(const Key('capture_channel_voice')), findsOneWidget);
     expect(find.byKey(const Key('capture_channel_photo')), findsOneWidget);
@@ -248,6 +250,13 @@ void main() {
     // 说通道：面板标题 + 麦克风入口（Fake 链路只通面板，§3.3）。
     expect(find.text('说一笔'), findsOneWidget);
     expect(find.byKey(const Key('voice_capture_mic')), findsOneWidget);
+    // 拍通道（§11.2 W11-12 任务 2「『拍』段启用」）：面板标题 + 拍照/相册
+    // 双入口（仅入口渲染，不发起拍照——零平台通道/零网络）。
+    await tester.tap(find.byKey(const Key('capture_channel_photo')));
+    await tester.pump();
+    expect(find.text('拍一笔'), findsOneWidget);
+    expect(find.byKey(const Key('capture_photo_camera')), findsOneWidget);
+    expect(find.byKey(const Key('capture_photo_gallery')), findsOneWidget);
     await tester.tap(find.byKey(const Key('capture_channel_text')));
     await tester.pump();
     expect(find.text('记一笔'), findsOneWidget, reason: '切回写通道复现 CapturePage');

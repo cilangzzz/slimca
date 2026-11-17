@@ -1,4 +1,23 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- W11-12 拍照通道（§11.2 任务 1「权限与插件」、§3.3 拍照通道；§3.3
+         数据主权最小权限——相册读取按 API 分级声明）：
+         - CAMERA：拍照入口（image_picker ImageSource.camera）；
+         - 相册读取分级：
+           · API 33+：READ_MEDIA_IMAGES（照片细粒度媒体权限）；
+           · API 34+ 部分授权：READ_MEDIA_VISUAL_USER_SELECTED（用户自选照片）；
+           · API ≤32：READ_EXTERNAL_STORAGE（maxSdkVersion=32 退级声明）；
+         - image_picker 在 Android 13+ 实际走系统 Photo Picker（无需运行时
+           媒体权限），旧机型回落运行时授权。 -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"/>
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
+    <!-- 相机为可选能力（§3.3）：无相机设备仍可经相册入口使用拍照通道。 -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false"/>
     <application
         android:label="slimca"
         android:name="${applicationName}"

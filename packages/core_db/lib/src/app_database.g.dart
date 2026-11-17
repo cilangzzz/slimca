@@ -15768,6 +15768,27 @@ class $AttachmentsTable extends Attachments
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('active'),
+  );
+  static const VerificationMeta _burnedAtMeta = const VerificationMeta(
+    'burnedAt',
+  );
+  @override
+  late final GeneratedColumn<int> burnedAt = GeneratedColumn<int>(
+    'burned_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -15778,6 +15799,8 @@ class $AttachmentsTable extends Attachments
     sizeBytes,
     localPath,
     blobRef,
+    status,
+    burnedAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -15851,6 +15874,18 @@ class $AttachmentsTable extends Attachments
         blobRef.isAcceptableOrUnknown(data['blob_ref']!, _blobRefMeta),
       );
     }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    }
+    if (data.containsKey('burned_at')) {
+      context.handle(
+        _burnedAtMeta,
+        burnedAt.isAcceptableOrUnknown(data['burned_at']!, _burnedAtMeta),
+      );
+    }
     return context;
   }
 
@@ -15892,6 +15927,14 @@ class $AttachmentsTable extends Attachments
         DriftSqlType.string,
         data['${effectivePrefix}blob_ref'],
       ),
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      )!,
+      burnedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}burned_at'],
+      ),
     );
   }
 
@@ -15903,9 +15946,14 @@ class $AttachmentsTable extends Attachments
 
 class Attachment extends DataClass implements Insertable<Attachment> {
   /// UUIDv7 主键（应用层生成，§5.1）。
+  ///
+  /// id 内嵌 48 位 unix 毫秒——即焚清理（>7 天残留强制焚毁）的「残留
+  /// 时长」判据由此得出，不另设 created_at 列（§5.6⑭ ai_parses「7 天时效
+  /// 判断可由 UUIDv7 id 内嵌时间戳得出，故不另设时间列」同一口径）。
   final String id;
 
-  /// 所属事件（可空）；逻辑引用不建外键（服务端为主、pull 顺序不定）。
+  /// 所属事件（可空：拍照先于事件落库）；逻辑引用不建外键
+  /// （服务端为主、pull 顺序不定）。
   final String? entryId;
 
   /// 去重键（sha256 内容哈希；去重由应用层查重保证，§5.6）。
@@ -15921,10 +15969,19 @@ class Attachment extends DataClass implements Insertable<Attachment> {
   final int sizeBytes;
 
   /// 本地文件路径。
+  ///
+  /// 即焚后保留（审计元数据：内容曾在此、已焚毁），不代表内容仍存在。
   final String localPath;
 
-  /// 服务端 blob 引用（可空；默认即焚为 NULL）。
+  /// 服务端 blob 引用（可空；默认即焚为 NULL——原图不落服务端，§5.6）。
   final String? blobRef;
+
+  /// 即焚状态机（§3.3）：active（本地内容存在）/ burned（内容已焚毁）。
+  /// 列默认值 'active'：v1 内补列的迁移风险规避（§6.4 只加列）。
+  final String status;
+
+  /// 即焚时刻 UTC ms（NULL=未焚毁）——审计元数据（保留时刻、不保留内容）。
+  final int? burnedAt;
   const Attachment({
     required this.id,
     this.entryId,
@@ -15934,6 +15991,8 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     required this.sizeBytes,
     required this.localPath,
     this.blobRef,
+    required this.status,
+    this.burnedAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -15949,6 +16008,10 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     map['local_path'] = Variable<String>(localPath);
     if (!nullToAbsent || blobRef != null) {
       map['blob_ref'] = Variable<String>(blobRef);
+    }
+    map['status'] = Variable<String>(status);
+    if (!nullToAbsent || burnedAt != null) {
+      map['burned_at'] = Variable<int>(burnedAt);
     }
     return map;
   }
@@ -15967,6 +16030,10 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       blobRef: blobRef == null && nullToAbsent
           ? const Value.absent()
           : Value(blobRef),
+      status: Value(status),
+      burnedAt: burnedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(burnedAt),
     );
   }
 
@@ -15984,6 +16051,8 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       sizeBytes: serializer.fromJson<int>(json['sizeBytes']),
       localPath: serializer.fromJson<String>(json['localPath']),
       blobRef: serializer.fromJson<String?>(json['blobRef']),
+      status: serializer.fromJson<String>(json['status']),
+      burnedAt: serializer.fromJson<int?>(json['burnedAt']),
     );
   }
   @override
@@ -15998,6 +16067,8 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       'sizeBytes': serializer.toJson<int>(sizeBytes),
       'localPath': serializer.toJson<String>(localPath),
       'blobRef': serializer.toJson<String?>(blobRef),
+      'status': serializer.toJson<String>(status),
+      'burnedAt': serializer.toJson<int?>(burnedAt),
     };
   }
 
@@ -16010,6 +16081,8 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     int? sizeBytes,
     String? localPath,
     Value<String?> blobRef = const Value.absent(),
+    String? status,
+    Value<int?> burnedAt = const Value.absent(),
   }) => Attachment(
     id: id ?? this.id,
     entryId: entryId.present ? entryId.value : this.entryId,
@@ -16019,6 +16092,8 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     sizeBytes: sizeBytes ?? this.sizeBytes,
     localPath: localPath ?? this.localPath,
     blobRef: blobRef.present ? blobRef.value : this.blobRef,
+    status: status ?? this.status,
+    burnedAt: burnedAt.present ? burnedAt.value : this.burnedAt,
   );
   Attachment copyWithCompanion(AttachmentsCompanion data) {
     return Attachment(
@@ -16032,6 +16107,8 @@ class Attachment extends DataClass implements Insertable<Attachment> {
       sizeBytes: data.sizeBytes.present ? data.sizeBytes.value : this.sizeBytes,
       localPath: data.localPath.present ? data.localPath.value : this.localPath,
       blobRef: data.blobRef.present ? data.blobRef.value : this.blobRef,
+      status: data.status.present ? data.status.value : this.status,
+      burnedAt: data.burnedAt.present ? data.burnedAt.value : this.burnedAt,
     );
   }
 
@@ -16045,7 +16122,9 @@ class Attachment extends DataClass implements Insertable<Attachment> {
           ..write('mime: $mime, ')
           ..write('sizeBytes: $sizeBytes, ')
           ..write('localPath: $localPath, ')
-          ..write('blobRef: $blobRef')
+          ..write('blobRef: $blobRef, ')
+          ..write('status: $status, ')
+          ..write('burnedAt: $burnedAt')
           ..write(')'))
         .toString();
   }
@@ -16060,6 +16139,8 @@ class Attachment extends DataClass implements Insertable<Attachment> {
     sizeBytes,
     localPath,
     blobRef,
+    status,
+    burnedAt,
   );
   @override
   bool operator ==(Object other) =>
@@ -16072,7 +16153,9 @@ class Attachment extends DataClass implements Insertable<Attachment> {
           other.mime == this.mime &&
           other.sizeBytes == this.sizeBytes &&
           other.localPath == this.localPath &&
-          other.blobRef == this.blobRef);
+          other.blobRef == this.blobRef &&
+          other.status == this.status &&
+          other.burnedAt == this.burnedAt);
 }
 
 class AttachmentsCompanion extends UpdateCompanion<Attachment> {
@@ -16084,6 +16167,8 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
   final Value<int> sizeBytes;
   final Value<String> localPath;
   final Value<String?> blobRef;
+  final Value<String> status;
+  final Value<int?> burnedAt;
   final Value<int> rowid;
   const AttachmentsCompanion({
     this.id = const Value.absent(),
@@ -16094,6 +16179,8 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     this.sizeBytes = const Value.absent(),
     this.localPath = const Value.absent(),
     this.blobRef = const Value.absent(),
+    this.status = const Value.absent(),
+    this.burnedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   AttachmentsCompanion.insert({
@@ -16105,6 +16192,8 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     required int sizeBytes,
     required String localPath,
     this.blobRef = const Value.absent(),
+    this.status = const Value.absent(),
+    this.burnedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        contentHash = Value(contentHash),
@@ -16121,6 +16210,8 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     Expression<int>? sizeBytes,
     Expression<String>? localPath,
     Expression<String>? blobRef,
+    Expression<String>? status,
+    Expression<int>? burnedAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -16132,6 +16223,8 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
       if (sizeBytes != null) 'size_bytes': sizeBytes,
       if (localPath != null) 'local_path': localPath,
       if (blobRef != null) 'blob_ref': blobRef,
+      if (status != null) 'status': status,
+      if (burnedAt != null) 'burned_at': burnedAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -16145,6 +16238,8 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     Value<int>? sizeBytes,
     Value<String>? localPath,
     Value<String?>? blobRef,
+    Value<String>? status,
+    Value<int?>? burnedAt,
     Value<int>? rowid,
   }) {
     return AttachmentsCompanion(
@@ -16156,6 +16251,8 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
       sizeBytes: sizeBytes ?? this.sizeBytes,
       localPath: localPath ?? this.localPath,
       blobRef: blobRef ?? this.blobRef,
+      status: status ?? this.status,
+      burnedAt: burnedAt ?? this.burnedAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -16187,6 +16284,12 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
     if (blobRef.present) {
       map['blob_ref'] = Variable<String>(blobRef.value);
     }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (burnedAt.present) {
+      map['burned_at'] = Variable<int>(burnedAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -16204,6 +16307,8 @@ class AttachmentsCompanion extends UpdateCompanion<Attachment> {
           ..write('sizeBytes: $sizeBytes, ')
           ..write('localPath: $localPath, ')
           ..write('blobRef: $blobRef, ')
+          ..write('status: $status, ')
+          ..write('burnedAt: $burnedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -23645,6 +23750,8 @@ typedef $$AttachmentsTableCreateCompanionBuilder =
       required int sizeBytes,
       required String localPath,
       Value<String?> blobRef,
+      Value<String> status,
+      Value<int?> burnedAt,
       Value<int> rowid,
     });
 typedef $$AttachmentsTableUpdateCompanionBuilder =
@@ -23657,6 +23764,8 @@ typedef $$AttachmentsTableUpdateCompanionBuilder =
       Value<int> sizeBytes,
       Value<String> localPath,
       Value<String?> blobRef,
+      Value<String> status,
+      Value<int?> burnedAt,
       Value<int> rowid,
     });
 
@@ -23706,6 +23815,16 @@ class $$AttachmentsTableFilterComposer
 
   ColumnFilters<String> get blobRef => $composableBuilder(
     column: $table.blobRef,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get burnedAt => $composableBuilder(
+    column: $table.burnedAt,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -23758,6 +23877,16 @@ class $$AttachmentsTableOrderingComposer
     column: $table.blobRef,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get burnedAt => $composableBuilder(
+    column: $table.burnedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$AttachmentsTableAnnotationComposer
@@ -23794,6 +23923,12 @@ class $$AttachmentsTableAnnotationComposer
 
   GeneratedColumn<String> get blobRef =>
       $composableBuilder(column: $table.blobRef, builder: (column) => column);
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<int> get burnedAt =>
+      $composableBuilder(column: $table.burnedAt, builder: (column) => column);
 }
 
 class $$AttachmentsTableTableManager
@@ -23835,6 +23970,8 @@ class $$AttachmentsTableTableManager
                 Value<int> sizeBytes = const Value.absent(),
                 Value<String> localPath = const Value.absent(),
                 Value<String?> blobRef = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<int?> burnedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => AttachmentsCompanion(
                 id: id,
@@ -23845,6 +23982,8 @@ class $$AttachmentsTableTableManager
                 sizeBytes: sizeBytes,
                 localPath: localPath,
                 blobRef: blobRef,
+                status: status,
+                burnedAt: burnedAt,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -23857,6 +23996,8 @@ class $$AttachmentsTableTableManager
                 required int sizeBytes,
                 required String localPath,
                 Value<String?> blobRef = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<int?> burnedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => AttachmentsCompanion.insert(
                 id: id,
@@ -23867,6 +24008,8 @@ class $$AttachmentsTableTableManager
                 sizeBytes: sizeBytes,
                 localPath: localPath,
                 blobRef: blobRef,
+                status: status,
+                burnedAt: burnedAt,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

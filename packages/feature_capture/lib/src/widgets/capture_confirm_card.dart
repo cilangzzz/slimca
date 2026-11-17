@@ -146,12 +146,20 @@ class CaptureConfirmCard extends StatelessWidget {
   Widget _slot(Widget child) =>
       Padding(padding: const EdgeInsets.only(bottom: 12), child: child);
 
-  /// 来源徽标：AI 解析 / 缓存复用（input_hash，§3.3）/ 最近复记（§2.4）。
+  /// 来源徽标：AI 解析 / 缓存复用（input_hash，§3.3）/ 最近复记（§2.4）/
+  /// 拍照识别与端侧粗估（§11.2 W11-12、§3.7——端侧路径无 ai_parse_id，
+  /// 云端识别有，借此区分文案）。
   Widget _badge(BuildContext context) {
     final tokens = context.slimca;
     final label = form.aiInitials == null
         ? (form.pendingSource.wire == 'chip' ? '最近记录复记（§2.4）' : '手动填写')
-        : (form.parseFromCache ? 'AI 解析 · 缓存复用（§3.3）' : 'AI 解析初值（§7.1）');
+        : form.parseFromCache
+            ? 'AI 解析 · 缓存复用（§3.3）'
+            : form.pendingSource.wire == 'photo'
+                ? (form.aiParseId == null
+                    ? '拍照端侧粗估初值（§3.7）'
+                    : '拍照识别初值（§11.2）')
+                : 'AI 解析初值（§7.1）';
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(

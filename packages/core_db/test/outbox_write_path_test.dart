@@ -11,7 +11,13 @@
 ///    墓碑、出网快照以 delete 语义收敛为一条；入队失败 → 事务整体回滚，
 ///    不产生半途业务行或半途 outbox（§6.2 事务一致性）；
 /// 4. seed 默认数据行入队（ledgers/categories，§11.1 W7-8 双设备一致率）：
-///    首次 seed 全量入队、重复 seed 幂等不再入队、payload 完整性。
+///    首次 seed 全量入队、重复 seed 幂等不再入队、payload 完整性；
+/// 5. food_items 写路径 outbox 覆盖（§5.2③ 真值表、W7-8 补课断言）：核对
+///    FoodItemsDao 三写路径（create/updateDetails/softDelete）行快照同事务
+///    入队（§6.2）、payload 回放一致、入队失败整体回滚。feature_capture
+///    网关 submitAiCapture 的内联 food_items 写入同口径（已在
+///    feature_capture/test/capture_outbox_test.dart 覆盖），此处补 core_db
+///    侧一等写路径的断言（W11-12 拍照通道复用同一纪律）。
 ///
 /// 运行前提：集成阶段已 `flutter pub get` + build_runner（内存库经
 /// drift/native 即可用）；宿主缺 sqlite3 运行库时温和跳过（同既有策略）。
@@ -354,6 +360,116 @@ void main() {
       expect(linePayload['type'], 'money');
       expect(linePayload['amount'], 1800);
       expect(linePayload['direction'], 'out');
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('food_items 写路径 outbox 覆盖（W7-8 补课断言）：三写路径同事务入队、'
+      'payload 回放一致、no-op 不推快照、入队失败整体回滚', () async {
+    final db = await tryOpenTestDatabase();
+    if (db == null) {
+      // ignore: avoid_print
+      print('SKIP：宿主缺 sqlite3 运行库，outbox 写路径测试未执行');
+      return;
+    }
+    try {
+      await drainSeedOutbox(db); // 清空 seed 出网项，精确断言本次写路径。
+      final dao = FoodItemsDao(db);
+
+      // create：1 条 upsert 出网行（§5.2③ 真值表，§6.2 同事务纪律）。
+      final item = await dao.create(
+        entryId: 'entry-ob-1',
+        lineId: 'line-ob-1',
+        name: '兰州拉面',
+        portionG: 450,
+        kcal: 500,
+        proteinG: 25,
+        carbG: 65,
+        fatG: 12,
+        refSource: 'local',
+        confidence: 0.62,
+        id: 'food-ob-1',
+      );
+      var rows = await outboxRows(db);
+      expect(rows, hasLength(1), reason: 'create → 1 条出网行（§6.2）');
+      expect(rows.single.targetTable, 'food_items');
+      expect(rows.single.rowId, item.id);
+      expect(rows.single.op, 'upsert');
+      await expectPayloadEqualsRow(db, rows.single);
+      var payload = jsonDecode(rows.single.payload) as Map<String, Object?>;
+      expect(payload['entry_id'], 'entry-ob-1');
+      expect(payload['line_id'], 'line-ob-1', reason: '§5.2③ line_id 溯源');
+      expect(payload['name'], '兰州拉面');
+      expect(payload['kcal'], 500);
+      expect(payload['portion_g'], 450);
+      expect(payload['ref_source'], 'local');
+      expect(payload['user_adjusted'], 0,
+          reason: 'AI 初值未改（bool 存 INTEGER）');
+      expect(payload['deleted_at'], isNull, reason: '存活行 upsert 出网');
+      var lastRevision = rows.single.baseRevision!;
+      expect(lastRevision, 1);
+
+      // updateDetails：真实写入改写 pending 出网行为最新快照（入队去重，
+      // §6.2 折叠语义），user_adjusted 校准信号随行快照出网。
+      await dao.updateDetails(id: item.id, portionG: 300, kcal: 855);
+      rows = await outboxRows(db);
+      expect(rows, hasLength(1), reason: 'pending 出网行收敛到最新快照');
+      await expectPayloadEqualsRow(db, rows.single);
+      payload = jsonDecode(rows.single.payload) as Map<String, Object?>;
+      expect(payload['portion_g'], 300);
+      expect(payload['kcal'], 855);
+      expect(payload['user_adjusted'], 1,
+          reason: '§5.2③「用户是否改过」随行快照走（校准信号）');
+      expect(rows.single.baseRevision!, greaterThan(lastRevision));
+      lastRevision = rows.single.baseRevision!;
+
+      // no-op 更新（无事实变化）：不推版本、不推进快照（§6.2 只对真实
+      // 写入入队）。
+      await dao.updateDetails(id: item.id, kcal: 855);
+      rows = await outboxRows(db);
+      expect(rows, hasLength(1));
+      expect(rows.single.baseRevision, lastRevision, reason: 'no-op 不入队');
+
+      // softDelete：墓碑快照 → op=delete（§5.6⑯/§6.5）。
+      await dao.softDelete(item.id);
+      rows = await outboxRows(db);
+      expect(rows, hasLength(1));
+      expect(rows.single.op, 'delete', reason: '墓碑行以 delete 语义出网');
+      await expectPayloadEqualsRow(db, rows.single);
+      payload = jsonDecode(rows.single.payload) as Map<String, Object?>;
+      expect(payload['deleted_at'], isNotNull);
+
+      // 事务一致性（§6.2 无半途）：food_items 业务写成功后入队失败 →
+      // 整体回滚——业务行与出网行均无新增。
+      final pendingBefore = (await db.select(db.syncOutbox).get()).length;
+      final foodBefore = await db.select(db.foodItems).get();
+      await expectLater(
+        db.transaction(() async {
+          await dao.create(
+            entryId: 'entry-ob-2',
+            lineId: 'line-ob-2',
+            name: '卤蛋',
+            portionG: 60,
+            kcal: 200,
+            proteinG: 12,
+            carbG: 1,
+            fatG: 14,
+            refSource: 'baidu',
+            confidence: 0.9,
+            id: 'food-ob-2',
+          );
+          // food_items 同事务纪律由 DAO 内部 enqueueRow 承担；此处人为
+          // 再入队一个不存在行制造失败，验证回滚覆盖 food_items 行。
+          await SyncOutboxWriter(db).enqueueRow('food_items', 'ghost-item');
+        }),
+        throwsStateError,
+      );
+      final foodAfter = await db.select(db.foodItems).get();
+      expect(foodAfter.length, foodBefore.length,
+          reason: 'food_items 业务行随入队失败回滚（§6.2 同事务纪律）');
+      expect((await db.select(db.syncOutbox).get()).length, pendingBefore,
+          reason: '无半途 outbox（§6.2 事务一致性）');
     } finally {
       await db.close();
     }

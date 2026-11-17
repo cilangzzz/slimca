@@ -67,6 +67,18 @@ dependencies:
   # path_provider——W7-8 遥测落盘目录（§3.9 监控；support 目录/telemetry）。
   path_provider: ^2.1.0
 
+  # W11-12 拍照通道接线（§11.2、§3.3 拍照通道；§10.4 壳层插件依赖）：
+  # image_picker——拍照/相册双入口（ImageSource.camera/gallery 薄封装经
+  #   captureImageSourceProvider 注入，测试用 FakeImageSource 禁真实相机）；
+  #   端侧压缩在拾取参数内完成（长边 1280、JPEG q80，§3.3）。
+  image_picker: ^1.1.2
+  # crypto——压缩产物 sha256 content_hash（一址两用：attachments 去重键
+  #   §5.6㉑ + ai_parses.input_hash photo 缓存键 §5.6⑭）。
+  crypto: ^3.0.0
+  # http——百度菜品识别 / Vision LLM 传输层（§3.3 双供应商防单点；真实凭据
+  #   未提供，dart-define 注入、缺省离线桩，remaining：待凭据联调）。
+  http: ^1.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

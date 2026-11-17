@@ -267,19 +267,44 @@ class OpenAiCompatibleAdapter implements LlmAdapter {
   /// 组装 OpenAI 兼容请求体；response_format 按模型 capability 两档选位：
   /// json_schema 为最高档（§7.2），json_object 为宽档，模型不支持时不附加
   /// （约束由提示词承载、正确性由 parse 层校验器兜底）。
+  ///
+  /// 消息序列化：纯文本走 content 字符串；多模态（§3.3 拍照通道）走
+  /// content 数组（text / image_url 段，Qwen-VL/GLM-4V 兼容端点同构）。
   Map<String, Object?> _buildBody(LlmRequest request) {
     final responseFormat = _responseFormat(request);
     return <String, Object?>{
       'model': config.model,
-      'messages': <Map<String, String>>[
+      'messages': <Object?>[
         for (final message in request.messages)
-          <String, String>{'role': message.role.name, 'content': message.content},
+          message.isMultimodal
+              ? <String, Object?>{
+                  'role': message.role.name,
+                  'content': <Object?>[
+                    for (final part in message.parts) _contentPartJson(part),
+                  ],
+                }
+              : <String, String>{
+                  'role': message.role.name,
+                  'content': message.content,
+                },
       ],
       'temperature': request.temperature ?? 0.2,
       if (request.maxTokens != null) 'max_tokens': request.maxTokens,
       if (responseFormat != null) 'response_format': responseFormat,
     };
   }
+
+  /// 多模态内容段 → OpenAI 兼容 content 数组元素（§3.3 拍照通道）。
+  Map<String, Object?> _contentPartJson(LlmContentPart part) => switch (part) {
+        LlmTextPart(:final text) => <String, Object?>{
+            'type': 'text',
+            'text': text,
+          },
+        LlmImageUrlPart(:final url) => <String, Object?>{
+            'type': 'image_url',
+            'image_url': <String, Object?>{'url': url},
+          },
+      };
 
   Map<String, Object?>? _responseFormat(LlmRequest request) {
     switch (request.jsonIntent) {

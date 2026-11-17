@@ -8,6 +8,7 @@ library;
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
+import 'dao/attachments_dao.dart' show backfillAttachmentBurnColumns;
 import 'dao/default_seed.dart';
 import 'tables/event_tables.dart';
 import 'tables/infra_tables.dart';
@@ -70,6 +71,13 @@ class AppDatabase extends _$AppDatabase {
           // 同步层注意：pull 需按父表→子表依赖序落库（§6.2 per-table 游标）；
           // 物理 GC（墓碑 90 天）需先删子行再删父墓碑（§5.1）。
           await customStatement('PRAGMA foreign_keys = ON');
+          // §11.2 W11-12：attachments 即焚状态机两列（status/burned_at，
+          // §5.6㉑/§3.3）为 v1 内补列——schemaVersion 保持 1（§6.4 只加列、
+          // 列默认值规避迁移风险），旧 v1 库文件在此幂等补列；新库 createAll
+          // 已含两列，本调用为 no-op。取舍详见 backfillAttachmentBurnColumns。
+          // schema 就绪先行，再跑 seed（seed 行不触 attachments，但次序上
+          // 「先补列后写数据」是迁移惯例）。
+          await backfillAttachmentBurnColumns(this);
           // §5.4/§11.1 W2：空库首次打开 seed 默认数据（幂等）——默认 money
           // 账本 + 内置 kcal 账本 + 20+ 中文分类 + settings（device_id/
           // default_ledger_id），详见 dao/default_seed.dart。

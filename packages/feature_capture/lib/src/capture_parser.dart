@@ -306,6 +306,10 @@ abstract final class CaptureInputNormalizer {
   /// 输入通道常量：文本（§5.6⑭ input_kind）。
   static const String kindText = 'text';
 
+  /// ai_parses.input_kind 拍照通道值（§5.6⑭、§11.2 W11-12；缓存键口径同
+  /// sha256，被 hashing 的内容是端侧压缩后的图片字节）。
+  static const String kindPhoto = 'photo';
+
   /// 规范化：去首尾空白 + 连续空白折叠为单空格（缓存命中口径，§7.1）。
   static String normalize(String raw) =>
       raw.trim().replaceAll(RegExp(r'\s+'), ' ');

@@ -271,13 +271,33 @@ class Devices extends Table {
 
 /// ㉑ attachments — 附件引用登记（P1，服务端为主）（§5.6）。
 ///
-/// 默认「解析后即焚」：原图不落服务端，仅结构化引用可同步（§5.6）。
+/// 拍照通道（§11.2 W11-12、§3.3「原图解析后即焚不落存储」、§5.6「默认
+/// 『解析后即焚』：原图不落服务端；仅结构化引用可同步」）的本地审计台账：
+/// - 行只登记元数据（路径/哈希/字节大小/mime），内容本体在文件系统；
+/// - 即焚状态机（§3.3 拍照通道）：`active`（本地内容存在）→ `burned`
+///   （内容已焚毁），单向、不可逆（恢复无意义——内容已销毁）；
+/// - burned 行保留全部审计元数据（hash/size/mime/local_path/burned_at），
+///   只焚毁内容不抹除痕迹（合规审计：照片曾在、何时焚毁，§3.9 隐私自查）；
+/// - 同步口径：attachments 不在 §5.1「同步真值表 14 张」内（§5.6 表分组
+///   「服务端为主 2 张」），即焚生命周期 status/burned_at 为设备本地审计
+///   列、不参与同步——服务端 schema（server/supabase 0001_init.sql）的
+///   attachments 为结构化引用登记，客户端焚毁动作不出网。
+///
+/// schema 演进注记（§6.4「行级 schema_ver 只加列前向兼容」）：status 带
+/// 默认值 'active'、burned_at 可空——v1 内补列（schemaVersion 保持 1），
+/// 旧 v1 库文件由 `backfillAttachmentBurnColumns` 幂等补列（见
+/// dao/attachments_dao.dart），规避 v1-v3 冻结期的迁移风险。
 @DataClassName('Attachment')
 class Attachments extends Table {
   /// UUIDv7 主键（应用层生成，§5.1）。
+  ///
+  /// id 内嵌 48 位 unix 毫秒——即焚清理（>7 天残留强制焚毁）的「残留
+  /// 时长」判据由此得出，不另设 created_at 列（§5.6⑭ ai_parses「7 天时效
+  /// 判断可由 UUIDv7 id 内嵌时间戳得出，故不另设时间列」同一口径）。
   TextColumn get id => text()();
 
-  /// 所属事件（可空）；逻辑引用不建外键（服务端为主、pull 顺序不定）。
+  /// 所属事件（可空：拍照先于事件落库）；逻辑引用不建外键
+  /// （服务端为主、pull 顺序不定）。
   TextColumn get entryId => text().nullable()();
 
   /// 去重键（sha256 内容哈希；去重由应用层查重保证，§5.6）。
@@ -293,10 +313,19 @@ class Attachments extends Table {
   IntColumn get sizeBytes => integer()();
 
   /// 本地文件路径。
+  ///
+  /// 即焚后保留（审计元数据：内容曾在此、已焚毁），不代表内容仍存在。
   TextColumn get localPath => text()();
 
-  /// 服务端 blob 引用（可空；默认即焚为 NULL）。
+  /// 服务端 blob 引用（可空；默认即焚为 NULL——原图不落服务端，§5.6）。
   TextColumn get blobRef => text().nullable()();
+
+  /// 即焚状态机（§3.3）：active（本地内容存在）/ burned（内容已焚毁）。
+  /// 列默认值 'active'：v1 内补列的迁移风险规避（§6.4 只加列）。
+  TextColumn get status => text().withDefault(const Constant('active'))();
+
+  /// 即焚时刻 UTC ms（NULL=未焚毁）——审计元数据（保留时刻、不保留内容）。
+  IntColumn get burnedAt => integer().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};

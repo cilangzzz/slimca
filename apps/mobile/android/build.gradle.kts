@@ -1,5 +1,8 @@
 allprojects {
     repositories {
+        // 国内镜像优先（官方源兜底），2026-11-17 构建实测 google()/mavenCentral() 直连不稳
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/central")
         google()
         mavenCentral()
     }

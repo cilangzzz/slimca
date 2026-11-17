@@ -10,7 +10,11 @@
 ///    遥测埋点(raw_input 开关位) → raw_input 闸门(§3.7) → dart-define 工厂
 ///    （core_ai adapter，缺省 Fake——见 lib/ai/capture_parser_factory.dart）；
 /// 6. W7-8 装配（§11.1）：本地 JSONL 遥测（§3.9）、raw_input 上云开关装载
-///    （§3.7 默认关）、同步栈（后端工厂 → 引擎 → 设备注册 → 协调器，§6.2）。
+///    （§3.7 默认关）、同步栈（后端工厂 → 引擎 → 设备注册 → 协调器，§6.2）；
+/// 7. W11-12 装配（§11.2）：拍照通道注入点（image_picker ImageSource /
+///    端侧压缩 / 双供应商拍照解析 / attachments 即焚存储 / raw_input 闸门
+///    同源开关 / 拍照漏斗遥测）+ 拍照即焚开关装载（§3.7 默认开）+ 附件残留
+///    兜底清扫（>7 天强制焚毁，§5.6㉑）。
 ///
 /// 完成后以 [AppRuntime] 返回 override 清单与运行期句柄（遥测/开关/协调器）：
 /// `appDatabaseProvider` / `hlcClockProvider` / `captureGatewayProvider` /
@@ -33,8 +37,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import '../ai/capture_parser_factory.dart';
+import '../ai/photo_parser_factory.dart';
 import '../ai/raw_input_gate_capture_parser.dart';
 import '../ai/telemetry_capture_parser.dart';
+import '../photo/photo_attachment_store.dart';
+import '../photo/photo_compressor.dart';
+import '../photo/photo_image_source.dart';
+import '../settings/photo_burn_setting.dart';
 import '../settings/raw_input_setting.dart';
 import '../sync/sync_backend_factory.dart';
 import '../sync/sync_coordinator.dart';
@@ -102,6 +111,24 @@ Future<AppRuntime> bootstrap() async {
   final policy = RawInputPolicy();
   policy.enabled = await loadRawInputCloudEnabled(database);
 
+  // ── W11-12 · 拍照即焚开关（§3.7/§5.6㉑，默认开=解析后即焚，§11.2 任务 3）：
+  // 读 settings 装入上次用户选择；坏值回落默认开（即焚是合规缺省，损坏时取
+  // 更严档，§6.1——与 raw_input 开关「坏值回落更严」同向）。
+  final photoBurnPolicy = PhotoBurnPolicy();
+  photoBurnPolicy.enabled = await loadPhotoBurnAfterParse(database);
+
+  // ── W11-12 · 附件本机留档目录（§3.7 即焚开关=关时登记焚毁前复制原图）：
+  // support 目录/photo_archive；装配失败 → null=无条件即焚（缺省最严，
+  // §6.1——留档是用户附加选择，允许缺失降级）。
+  Directory? photoArchiveDirectory;
+  try {
+    final support = await getApplicationSupportDirectory();
+    photoArchiveDirectory =
+        Directory('${support.path}${Platform.pathSeparator}photo_archive');
+  } on Object {
+    photoArchiveDirectory = null;
+  }
+
   // ── W7-8 · 同步栈（§6.2、§11.1「托管 Supabase 接入」）：后端工厂按
   // dart-define 凭据装配（缺省本地回环，待用户凭据）→ 遥测装饰 → 引擎 →
   // 协调器（设备注册 §5.6⑰ + 周期/前台切回触发）。
@@ -121,6 +148,10 @@ Future<AppRuntime> bootstrap() async {
     registry: DeviceRegistry(database, backend),
     telemetry: telemetry,
   );
+
+  // ── W11-12 · 附件残留兜底清扫（§5.6㉑、§11.2「>7 天残留强制清理」）：
+  // 启动期一次性，失败不阻塞启动（下轮重试，§6.1）。
+  unawaited(_sweepAttachmentResidue(database));
 
   return AppRuntime(
     overrides: [
@@ -143,6 +174,39 @@ Future<AppRuntime> bootstrap() async {
           rawInputCloud: () => policy.enabled,
         ),
       ),
+      // ── W11-12 拍照通道注入点（§11.2 W11-12 任务 1/3/5，§10.4 壳负责
+      //    装配；测试注入 Fake 集，禁真实相机/网络）：
+      // - ImageSource：image_picker 薄封装（拍照/相册双入口；端侧压缩在
+      //   拾取参数内完成，长边 1280、JPEG q80，§3.3）；
+      captureImageSourceProvider.overrideWithValue(
+        const ImagePickerCaptureImageSource(),
+      ),
+      // - 端侧压缩：拾取参数已压缩，压缩器做规范化收口（mime 归一 image/jpeg
+      //   + sha256 content_hash 一址两用键，§5.6㉑/§5.6⑭）；
+      captureImageCompressorProvider.overrideWithValue(
+        const PickerCompressedCaptureCompressor(),
+      ),
+      // - 拍照解析：百度菜品识别先行 → Vision LLM 兜底（dart-define 凭据
+      //   注入，缺省离线确定性桩；remaining：待凭据联调，§3.3/§7.4）；
+      capturePhotoParserProvider.overrideWithValue(createCapturePhotoParser()),
+      // - 附件存储：core_db AttachmentsDao 桥接（登记即 burned、blob_ref 恒
+      //   NULL，§5.6㉑）+ content_hash 去重复用 + 即焚开关关闭时登记前本机
+      //   留档（§3.7；开关运行期经持有器同步读取，设置页 toggle 即刻生效）；
+      captureAttachmentStoreProvider.overrideWithValue(
+        DriftPhotoAttachmentStore(
+          database: database,
+          burnPolicy: photoBurnPolicy,
+          archiveDirectory: photoArchiveDirectory,
+        ),
+      ),
+      // - raw_input 上云闸门（§3.7，默认关=图片字节不出端 → 端侧粗估/人工
+      //   确认）：settings 持有器同步读取（与文本解析闸门同源开关）；
+      captureRawInputCloudEnabledProvider
+          .overrideWithValue(() => policy.enabled),
+      // - 拍照漏斗（§11.2 任务 5）：FileTelemetryService（缺省 null=不发
+      //   事件；装配失败回落 Noop 同源）。
+      capturePhotoTelemetryProvider.overrideWithValue(telemetry),
+      photoBurnPolicyProvider.overrideWithValue(photoBurnPolicy),
       // W7-8 运行期句柄注入（§10.4）。
       telemetryServiceProvider.overrideWithValue(telemetry),
       rawInputPolicyProvider.overrideWithValue(policy),
@@ -153,6 +217,19 @@ Future<AppRuntime> bootstrap() async {
     rawInputPolicy: policy,
     syncCoordinator: coordinator,
   );
+}
+
+/// 启动期附件残留兜底清扫（§5.6㉑、§11.2 W11-12「>7 天残留强制清理」）：
+/// 进程中断/焚毁失败的漏网残留由 core_db AttachmentsDao.purgeExpired 强制
+/// 焚毁（active 超龄行推 burned；burned 行意外残留文件防御性删除）。启动期
+/// 一次性、尽力而为——失败不阻塞启动（行保持 active，下轮启动重试，
+/// §6.1 降级纪律）。
+Future<void> _sweepAttachmentResidue(db.AppDatabase database) async {
+  try {
+    await db.AttachmentsDao(database).purgeExpired();
+  } on Object {
+    // 清扫失败静默（下轮启动重试，§6.1）。
+  }
 }
 
 /// 本地遥测装配（§3.9）：support 目录下 telemetry 子目录 JSONL 落盘。

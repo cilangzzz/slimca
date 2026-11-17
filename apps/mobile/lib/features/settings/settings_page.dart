@@ -10,6 +10,13 @@
 ///   购买/恢复按钮；真实 `in_app_purchase` 待商店开发者账号（W8-9 灰度），
 ///   价格待实测复核（§12.3）。
 ///
+/// W11-12 接入（§11.2 任务 3「隐私：拍照原图解析后即焚开关，默认开」）：
+/// - **拍照原图即焚开关**（§3.7、§3.3「原图解析后即焚不落存储」、§5.6㉑）：
+///   SwitchListTile 写回 PhotoBurnPolicy 运行期持有 + settings 表落库
+///   （§5.6⑲ 本地件、永不同步）；开（默认）=确认落库后原图不留副本；
+///   关=附件系统照常登记 burned，但登记焚毁前本机留档一份（photo_archive/，
+///   仅设备本地、永不上传，见 lib/photo/photo_attachment_store.dart）。
+///
 /// 主题编辑器、数据导出等仍为占位（§4.3 /settings/* 子路由后续接入）。
 library;
 
@@ -20,10 +27,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
 import '../../billing/billing_provider.dart';
+import '../../settings/photo_burn_setting.dart';
 import '../../settings/raw_input_setting.dart';
 
 /// 测试锚点：raw_input 上云开关。
 const Key settingsRawInputSwitchKey = Key('settings_raw_input_switch');
+
+/// 测试锚点：拍照原图即焚开关（§11.2 W11-12 任务 3）。
+const Key settingsPhotoBurnSwitchKey = Key('settings_photo_burn_switch');
 
 /// 测试锚点：恢复购买入口。
 const Key settingsRestorePurchasesKey = Key('settings_restore_purchases');
@@ -40,6 +51,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   /// 开关的页面态（toggle 立即反映；写盘异步跟随）。
   bool _rawInputCloud = false;
 
+  /// 拍照原图即焚开关页面态（§11.2 W11-12 任务 3；默认开 §3.7）。
+  bool _photoBurnAfterParse = true;
+
   /// 付费墙目录 Future（initState 拉取一次；Fake 流恒即时完成）。
   Future<BillingCatalog>? _catalogFuture;
 
@@ -50,6 +64,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   void initState() {
     super.initState();
     _rawInputCloud = ref.read(rawInputPolicyProvider).enabled;
+    _photoBurnAfterParse = ref.read(photoBurnPolicyProvider).enabled;
     _catalogFuture = ref.read(billingServiceProvider).queryProducts();
   }
 
@@ -61,6 +76,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     ref.read(rawInputPolicyProvider).enabled = enabled;
     try {
       await saveRawInputCloudEnabled(
+        ref.read(appDatabaseProvider),
+        enabled: enabled,
+      );
+    } on Object catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('开关保存失败（本地保留本次选择）：$error')),
+      );
+    }
+  }
+
+  /// 切换拍照原图即焚开关（§3.7/§11.2 任务 3）：先改运行期持有（附件存储在
+  /// 「登记即焚」时刻同步读取——toggle 即刻生效），再异步落库 settings 表
+  /// （§5.6⑲；失败仅 SnackBar，不回滚页面态，本地件自愈口径同上）。
+  Future<void> _togglePhotoBurnAfterParse(bool enabled) async {
+    setState(() => _photoBurnAfterParse = enabled);
+    ref.read(photoBurnPolicyProvider).enabled = enabled;
+    try {
+      await savePhotoBurnAfterParse(
         ref.read(appDatabaseProvider),
         enabled: enabled,
       );
@@ -145,6 +179,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
             value: _rawInputCloud,
             onChanged: _toggleRawInputCloud,
+          ),
+          const Divider(height: 1),
+          // ── 拍照原图即焚开关（§3.7/§3.3/§5.6㉑、§11.2 W11-12 任务 3，
+          //    默认开=解析后即焚；关=本机留档一份、永不上传）。
+          SwitchListTile(
+            key: settingsPhotoBurnSwitchKey,
+            secondary: const Icon(Icons.local_fire_department_outlined),
+            title: const Text('拍照原图解析后即焚'),
+            subtitle: const Text(
+              '开启（默认）：确认落库后立即删除原图，仅留结构化结果与审计'
+              '元数据，不落存储（§3.3/§5.6㉑）；关闭：本机留档一份原图便于'
+              '复查（仅设备本地，永不上传）',
+            ),
+            value: _photoBurnAfterParse,
+            onChanged: _togglePhotoBurnAfterParse,
           ),
           const Divider(height: 1),
           // ── 付费墙（§3.9 双轨：买断 + AI 订阅；W7-8 骨架=Fake 流）。

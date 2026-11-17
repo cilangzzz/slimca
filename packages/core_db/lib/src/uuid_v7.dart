@@ -47,3 +47,17 @@ String generateDeviceIdHex12({math.Random? random}) {
   }
   return buf.toString().toUpperCase();
 }
+
+/// UUIDv7 id 内嵌时间戳（48 位 unix 毫秒，大端存放于前 12 个 hex 字符）。
+///
+/// 「时间可由 id 得出就不另设时间列」的统一判据（§5.6⑭ ai_parses 7 天缓存
+/// 时效同一口径）：§11.2 W11-12 attachments 即焚清理（>7 天残留强制焚毁）
+/// 的残留时长亦由 [generateUuidV7] 生成的 id 内嵌时间戳得出。
+///
+/// 非法/非 UUIDv7 形态返回 null——调用方不据此判过期（宁可保守跳过，
+/// 也不误焚来源不明的行）。
+int? uuidV7TimestampMs(String id) {
+  final hex = id.replaceAll('-', '');
+  if (hex.length < 12) return null;
+  return int.tryParse(hex.substring(0, 12), radix: 16);
+}

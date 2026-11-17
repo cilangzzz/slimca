@@ -5,7 +5,8 @@
 /// - 仅记钱：W2 手动表单（方向 → 数字键盘 → 标题/分类/账本/日期/备注 → 保存，
 ///   §3.4 流水；编辑模式恒走此表单，金额不可变=新增修正行）；
 /// - 钱+热量 / 仅记热量：AI 双解析流状态机（[CaptureAiStage]）：
-///   文本输入区（+最近 chip 复记入口，§2.4）→ 解析中呼吸态 → 确认卡
+///   文本输入区（+最近 chip 复记入口，§2.4；+拍照/相册入口，§11.2 W11-12
+///   拍照通道）→ 解析中/拍照处理中呼吸态 → 确认卡
 ///   （AI 初值预填 + count-up + 环 sweep + 置信度三色点 + 份量滑杆，§9.3#4）
 ///   → 确认落库；解析失败自动降级手填表单且原文保留（§7.4、§2.4-3）。
 ///
@@ -27,6 +28,7 @@ import 'widgets/capture_date_row.dart';
 import 'widgets/capture_direction_toggle.dart';
 import 'widgets/capture_ledger_picker.dart';
 import 'widgets/capture_parsing_state.dart';
+import 'widgets/capture_photo_entry.dart';
 import 'widgets/capture_recent_chips.dart';
 import 'widgets/capture_side_toggle.dart';
 import 'widgets/capture_text_field.dart';
@@ -198,12 +200,23 @@ class CapturePage extends ConsumerWidget {
               onChanged: notifier.setInputText,
               onParse: notifier.startParse,
             ),
+            const SizedBox(height: 14),
+            // 拍照通道入口（§11.2 W11-12 任务 2「录入页『拍』段启用」）：
+            // 拍照/相册双入口 + §3.7 raw_input 口径隐私提示。
+            CapturePhotoEntry(
+              onCamera: () => notifier.startPhotoCapture(fromCamera: true),
+              onGallery: () => notifier.startPhotoCapture(fromCamera: false),
+            ),
           ],
         );
       case CaptureAiStage.parsing:
-        // 解析中呼吸态（§9.4「AI 等待骨架出现 ≤100ms」：切阶段为同步 setState，
-        // 网络等待发生在骨架之后）。
-        return const CaptureParsingState();
+        // 解析中/拍照处理中呼吸态（§9.4「AI 等待骨架出现 ≤100ms」：切阶段为
+        // 同步 setState，网络等待发生在骨架之后）。拍照通道经
+        // photoProcessingLabel 分段文案（压缩中… → 识别中…/端侧粗估中…，
+        // §11.2 W11-12）；文本/语音通道该字段为 null → 默认文案。
+        return CaptureParsingState(
+          label: form.photoProcessingLabel ?? 'AI 解析中…',
+        );
       case CaptureAiStage.confirm:
         return CaptureConfirmCard(
           form: form,

@@ -11,6 +11,7 @@ import 'package:core_domain/core_domain.dart' as dom;
 
 import 'capture_money.dart';
 import 'capture_parser.dart';
+import 'capture_photo_models.dart';
 
 /// 单边开关（§3.3「仅记钱 / 仅记热量，schema 中对应 lines 只产出一类」）。
 ///
@@ -32,11 +33,18 @@ enum CaptureSide {
 }
 
 /// AI 双解析流状态机（§3.3「文本输入区 → 解析 → 确认卡」、§2.3 步骤 2-4）。
+///
+/// 兼容注记（§11.2 W11-12）：拍照处理中**不新增枚举值**——复用 [parsing]
+/// 呼吸态 + [CaptureFormState.photoProcessingLabel] 分段文案（压缩中… →
+/// 识别中…/端侧粗估中…）。Dart 3 对枚举穷举 switch 是编译期硬约束，本枚举
+/// 加值会破坏既有宿主面板（语音通道）的穷举 switch 编译；拍照通道的语义
+/// 由 pendingPhoto/pendingSource 承载，不靠阶段值区分。
 enum CaptureAiStage {
   /// 文本输入区（含最近 chip 复记入口，§2.4）。
   input,
 
-  /// 解析中呼吸态（骨架出现 ≤100ms，§9.4）。
+  /// 解析中/拍照处理中呼吸态（骨架出现 ≤100ms，§9.4；拍照通道经
+  /// [CaptureFormState.photoProcessingLabel] 分段，§11.2）。
   parsing,
 
   /// 确认卡（AI 初值预填 + count-up + 环 sweep + 置信度三色点，§9.3#4）。
@@ -355,6 +363,8 @@ class CaptureFormState {
     this.parseFromCache = false,
     this.aiParseId,
     this.aiInitials,
+    this.pendingPhoto,
+    this.photoProcessingLabel,
     this.confirmKcal,
     this.portionBaseKcal,
     this.portionMultiplier = 1.0,
@@ -415,6 +425,18 @@ class CaptureFormState {
   /// AI 初值快照（差异审计「前值」，§5.6⑮；chip/manual 为 null）。
   final CaptureAiInitials? aiInitials;
 
+  /// 待焚拍照原件（§11.2 W11-12 任务 3「解析后即焚」，§5.6㉑ attachments）：
+  /// 非空 = 本笔来自拍照通道（source 记 photo，§5.2①）；确认落库成功后登记
+  /// attachments 行（burned）并删除本地临时文件；取消/切钱侧等放弃路径仅删
+  /// 文件（行尚未登记）。即焚前的确认承诺见控制器（§11.2 任务 4）。
+  final CapturePendingPhoto? pendingPhoto;
+
+  /// 拍照呼吸态分段文案（压缩中… → 识别中… / 端侧粗估中…，§9.4/§11.2）。
+  /// 语义：非空 = aiStage 处于 parsing 且本笔是拍照通道的处理等待（不新增
+  /// CaptureAiStage 枚举值的兼容设计，见 [CaptureAiStage] 注记）；文本/语音
+  /// 解析恒 null（呼吸态默认文案）。
+  final String? photoProcessingLabel;
+
   /// 确认卡当前热量（= portionBaseKcal × portionMultiplier，§3.3 滑杆联动重算）。
   final int? confirmKcal;
 
@@ -433,7 +455,8 @@ class CaptureFormState {
   /// 最近记录 chips（§2.4 复记 ≤5s）。
   final List<CaptureRecentEntry> recentEntries;
 
-  /// 待提交来源（确认=AI text / chip=复记 / 降级=manual，§5.2① source）。
+  /// 待提交来源（确认=AI text / chip=复记 / 降级=manual / 拍照通道=photo
+  /// （含拍照降级手填，§11.2 W11-12），§5.2① source）。
   final dom.EntrySource pendingSource;
 
   /// 待提交 money 行方向（AI 路径恒 out；chip 复记继承原行方向）。
@@ -449,6 +472,10 @@ class CaptureFormState {
 
   /// 是否处于 AI 双解析流（§3.3；money 侧为 W2 手动表单）。
   bool get isAiFlow => side != CaptureSide.money;
+
+  /// 本笔是否来自拍照通道（§11.2 W11-12：pendingPhoto 非空 = source 记
+  /// photo；与 aiStage 无关——降级手填/确认卡阶段同样携带待焚原件）。
+  bool get hasPendingPhoto => pendingPhoto != null;
 
   /// 确认卡是否渲染热量区（§3.3 单边开关：仅记热量只产 calorie 行）。
   bool get showCalorieInConfirm => side != CaptureSide.money;
@@ -515,8 +542,9 @@ class CaptureFormState {
   static const Object _unchanged = Object();
 
   /// 不可变更新；可空字段（categoryId/ledgerId/editTarget/errorText/
-  /// parseResult/aiParseId/aiInitials/confirmKcal/portionBaseKcal/
-  /// fallbackHint）以哨兵参数区分「不改动」与「置 null」。
+  /// parseResult/aiParseId/aiInitials/pendingPhoto/photoProcessingLabel/
+  /// confirmKcal/portionBaseKcal/fallbackHint）以哨兵参数区分「不改动」
+  /// 与「置 null」。
   CaptureFormState copyWith({
     CaptureSide? side,
     String? amountText,
@@ -538,6 +566,8 @@ class CaptureFormState {
     bool? parseFromCache,
     Object? aiParseId = _unchanged,
     Object? aiInitials = _unchanged,
+    Object? pendingPhoto = _unchanged,
+    Object? photoProcessingLabel = _unchanged,
     Object? confirmKcal = _unchanged,
     Object? portionBaseKcal = _unchanged,
     double? portionMultiplier,
@@ -580,6 +610,12 @@ class CaptureFormState {
         aiInitials: identical(aiInitials, _unchanged)
             ? this.aiInitials
             : aiInitials as CaptureAiInitials?,
+        pendingPhoto: identical(pendingPhoto, _unchanged)
+            ? this.pendingPhoto
+            : pendingPhoto as CapturePendingPhoto?,
+        photoProcessingLabel: identical(photoProcessingLabel, _unchanged)
+            ? this.photoProcessingLabel
+            : photoProcessingLabel as String?,
         confirmKcal: identical(confirmKcal, _unchanged)
             ? this.confirmKcal
             : confirmKcal as int?,
