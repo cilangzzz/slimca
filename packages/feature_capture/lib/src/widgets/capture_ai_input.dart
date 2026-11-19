@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:ui_kit/ui_kit.dart';
 
 import '../capture_models.dart';
+import 'capture_error_text.dart';
 import 'capture_text_field.dart';
 
 /// 解析按钮测试锚点。
@@ -25,6 +26,7 @@ class CaptureAiInput extends StatelessWidget {
     required this.onParse,
     required this.side,
     this.errorText,
+    this.expanded = false,
   });
 
   final String text;
@@ -35,6 +37,10 @@ class CaptureAiInput extends StatelessWidget {
   final CaptureSide side;
   final String? errorText;
 
+  /// composer 口径：输入字段纵向扩展吃满父级剩余空间、解析按钮贴底
+  /// （统一高度抽屉内填充式布局，杜绝空白死角）。缺省 false=紧凑三行。
+  final bool expanded;
+
   String get _hint => side == CaptureSide.calorie
       ? '如：喝了一杯黑咖啡（仅解析热量，§3.3）'
       : '例：中午吃了兰州拉面花了 18（§7.2）';
@@ -42,18 +48,20 @@ class CaptureAiInput extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.slimca;
+    final field = CaptureTextField(
+      key: captureAiInputKey,
+      initial: text,
+      hint: _hint,
+      maxLines: 3,
+      expands: expanded,
+      onChanged: onChanged,
+    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        CaptureTextField(
-          key: captureAiInputKey,
-          initial: text,
-          hint: _hint,
-          maxLines: 3,
-          onChanged: onChanged,
-        ),
-        const SizedBox(height: 12),
+        expanded ? Expanded(child: field) : field,
+        SizedBox(height: context.spacing.space150),
         FilledButton(
           key: captureParseButtonKey,
           onPressed: text.trim().isEmpty ? null : onParse,
@@ -62,10 +70,8 @@ class CaptureAiInput extends StatelessWidget {
             foregroundColor: tokens.onPrimary,
             disabledBackgroundColor: tokens.surfaceMuted,
             disabledForegroundColor: tokens.onSurfaceMuted,
-            minimumSize: const Size.fromHeight(48),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
+            minimumSize: Size.fromHeight(context.sizes.minTouchTarget),
+            shape: const StadiumBorder(), // §7.1 按钮胶囊（M3 full）
           ),
           child: const Text(
             '解析',
@@ -74,12 +80,8 @@ class CaptureAiInput extends StatelessWidget {
         ),
         if (errorText != null)
           Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-              errorText!,
-              key: const ValueKey('capture_error_text'),
-              style: TextStyle(fontSize: 13, color: tokens.danger),
-            ),
+            padding: EdgeInsets.only(top: context.spacing.space100),
+            child: CaptureErrorText(text: errorText!),
           ),
       ],
     );

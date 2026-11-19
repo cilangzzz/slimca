@@ -16,6 +16,8 @@ class CaptureTextField extends StatefulWidget {
     required this.onChanged,
     this.maxLines = 1,
     this.keyboardType,
+    this.expands = false,
+    this.obscureText = false,
   });
 
   /// 外部初始值/预填值（AI 初值、chip 预填、降级原文回填）。
@@ -24,6 +26,14 @@ class CaptureTextField extends StatefulWidget {
   final ValueChanged<String> onChanged;
   final int maxLines;
   final TextInputType? keyboardType;
+
+  /// 是否纵向扩展吃满父级（composer 输入面口径，写通道 AI 输入区用）：
+  /// true 时 [maxLines] 失效（TextField expands 契约要求 lines 均为 null），
+  /// 文本顶端对齐。
+  final bool expands;
+
+  /// 凭据遮蔽（AI API Key 等敏感输入；配合 autocorrect 关闭）。
+  final bool obscureText;
 
   @override
   State<CaptureTextField> createState() => _CaptureTextFieldState();
@@ -57,26 +67,35 @@ class _CaptureTextFieldState extends State<CaptureTextField> {
     final tokens = context.slimca;
     return TextField(
       controller: _controller,
-      maxLines: widget.maxLines,
+      expands: widget.expands,
+      maxLines: widget.expands ? null : widget.maxLines,
+      textAlignVertical: widget.expands ? TextAlignVertical.top : null,
       keyboardType: widget.keyboardType,
-      style: TextStyle(fontSize: 15, color: tokens.onSurface),
+      obscureText: widget.obscureText,
+      autocorrect: !widget.obscureText,
+      enableSuggestions: !widget.obscureText,
+      style: TextStyle(fontSize: 16, color: tokens.onSurface), // §7.3 input 16
       decoration: InputDecoration(
         hintText: widget.hint,
         hintStyle: TextStyle(fontSize: 14, color: tokens.onSurfaceMuted),
         filled: true,
         fillColor: tokens.surfaceCard,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        // §7.3 M3 文本框容器 56dp：单行态（16×~1.4 + 上下 16）≈56；多行态
+        // 随内容增长。
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: context.spacing.space200,
+          vertical: context.spacing.space200,
+        ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(context.sizes.radiusGroupCard),
           borderSide: BorderSide(color: tokens.outline),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(context.sizes.radiusGroupCard),
           borderSide: BorderSide(color: tokens.outline),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(context.sizes.radiusGroupCard),
           borderSide: BorderSide(color: tokens.primary, width: 1.5),
         ),
       ),

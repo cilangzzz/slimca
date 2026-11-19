@@ -32,6 +32,7 @@ class CapturePhotoEntry extends ConsumerWidget {
     super.key,
     required this.onCamera,
     required this.onGallery,
+    this.showGalleryEntry = true,
   });
 
   /// 发起拍照（漏斗 photo_capture_open from_camera=true，§11.2 任务 5）。
@@ -39,6 +40,11 @@ class CapturePhotoEntry extends ConsumerWidget {
 
   /// 发起相册选择（photo_capture_open from_camera=false）。
   final VoidCallback onGallery;
+
+  /// 是否露出相册选择入口（缺省 true=拍照/相册双入口）。拍通道面板传
+  /// false——拍照单一入口纪律：「拍」即拍照识别，通道内不再并列相册
+  /// 按钮（相册路径语义由 [onGallery] 与包测试保留）。
+  final bool showGalleryEntry;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -52,58 +58,64 @@ class CapturePhotoEntry extends ConsumerWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                key: capturePhotoCameraKey,
-                onPressed: onCamera,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: tokens.onSurface,
-                  side: BorderSide(color: tokens.primary),
-                  minimumSize: const Size.fromHeight(44),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-                icon: Icon(Icons.photo_camera_outlined,
-                    size: 18, color: tokens.primary),
-                label: const Text(
-                  '拍照识别',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: OutlinedButton.icon(
-                key: capturePhotoGalleryKey,
-                onPressed: onGallery,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: tokens.onSurface,
-                  side: BorderSide(color: tokens.onSurfaceMuted),
-                  minimumSize: const Size.fromHeight(44),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-                icon: Icon(Icons.photo_outlined,
-                    size: 18, color: tokens.onSurfaceMuted),
-                label: const Text(
-                  '相册选择',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
+        if (showGalleryEntry)
+          Row(
+            children: [
+              Expanded(child: _cameraButton(tokens, context)),
+              SizedBox(width: context.spacing.space250),
+              Expanded(child: _galleryButton(tokens, context)),
+            ],
+          )
+        else
+          // 拍照单一入口：全宽主按钮（拍通道口径，§10.4）。
+          _cameraButton(tokens, context),
+        SizedBox(height: context.spacing.space100),
         Text(
           hint,
           key: capturePhotoPrivacyHintKey,
-          style: TextStyle(fontSize: 11, color: tokens.onSurfaceMuted),
+          style: TextStyle(fontSize: 12, color: tokens.onSurfaceMuted),
         ),
       ],
+    );
+  }
+
+  /// 拍照识别主按钮（单一入口 / 双入口两态共用样式；胶囊 + 48 触控目标）。
+  Widget _cameraButton(SlimcaTheme tokens, BuildContext context) {
+    return OutlinedButton.icon(
+      key: capturePhotoCameraKey,
+      onPressed: onCamera,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: tokens.onSurface,
+        side: BorderSide(color: tokens.primary),
+        minimumSize: Size.fromHeight(context.sizes.minTouchTarget),
+        shape: const StadiumBorder(), // §7.1 按钮胶囊（M3 full）
+      ),
+      icon: Icon(Icons.photo_camera_outlined,
+          size: context.sizes.iconVisual, color: tokens.primary),
+      label: const Text(
+        '拍照识别',
+        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  /// 相册选择按钮（双入口态）。
+  Widget _galleryButton(SlimcaTheme tokens, BuildContext context) {
+    return OutlinedButton.icon(
+      key: capturePhotoGalleryKey,
+      onPressed: onGallery,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: tokens.onSurface,
+        side: BorderSide(color: tokens.onSurfaceMuted),
+        minimumSize: Size.fromHeight(context.sizes.minTouchTarget),
+        shape: const StadiumBorder(), // §7.1 按钮胶囊（M3 full）
+      ),
+      icon: Icon(Icons.photo_outlined,
+          size: context.sizes.iconVisual, color: tokens.onSurfaceMuted),
+      label: const Text(
+        '相册选择',
+        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
     );
   }
 }

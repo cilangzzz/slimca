@@ -2,18 +2,19 @@ import 'dart:async';
 
 import 'package:core_domain/core_domain.dart' show formatCalendarDay;
 import 'package:feature_capture/feature_capture.dart' show CaptureSeed;
-import 'package:feature_plan/feature_plan.dart' show FitnessPlanPage;
+import 'package:feature_plan/feature_plan.dart'
+    show FitnessPlanPage, SavingsPage, TodoPage;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:ui_kit/ui_kit.dart' show SlimcaSharedAxisPage;
+import 'package:ui_kit/ui_kit.dart'
+    show SlimcaCookieShapeBorder, SlimcaSharedAxisPage, SlimcaThemeBuildContext;
 
 import '../features/capture/capture_channels_sheet.dart';
 import '../features/dashboard/dashboard_state.dart';
 import '../features/dashboard/today_dashboard_page.dart';
 import '../features/ledger/budget_settings_page.dart';
 import '../features/ledger/ledger_page.dart';
-import '../features/plan/fitness_log_page.dart';
 import '../features/plan/plan_page.dart';
 import '../features/settings/settings_page.dart';
 import '../features/stats/stats_report_screen.dart';
@@ -71,10 +72,9 @@ final GoRouter slimcaRouter = GoRouter(
             ),
           ],
         ),
-        // Tab 3 计划：待办/健身/存钱/健身计划四卡（W5-6 真页 + W14 排期卡，
-        // §4.2）+ 健身手动记录子路由（§4.3 /plan/fitness P1 路由，W5-6 接入）
-        // + 训练中页子路由（§11.2 W14 任务 1/2：/plan/workout，排期卡
-        // 「开始训练」置态后推入，分支栈内 push）。
+        // Tab 3 计划：今日为纲（IA 重设计）——L0 今日三卡 + 域管理子路由
+        // （todos=收集箱 / savings=存钱目标列表 / plans=健身计划模板 /
+        // workout=训练页；健身记录页由壳层 Navigator.push 直达不占路由位）。
         StatefulShellBranch(
           routes: [
             GoRoute(
@@ -86,10 +86,17 @@ final GoRouter slimcaRouter = GoRouter(
                 // ——§9.5「路由级转场一律显式 PageRouteBuilder」，与
                 // /ledger/budgets、/stats 同款 SlimcaSharedAxisPage 注入。
                 GoRoute(
-                  path: 'fitness',
+                  path: 'todos',
                   pageBuilder: (context, state) => SlimcaSharedAxisPage(
                     name: state.matchedLocation,
-                    builder: (_) => const FitnessLogPage(),
+                    builder: (_) => const TodoPage(),
+                  ),
+                ),
+                GoRoute(
+                  path: 'savings',
+                  pageBuilder: (context, state) => SlimcaSharedAxisPage(
+                    name: state.matchedLocation,
+                    builder: (_) => const SavingsPage(),
                   ),
                 ),
                 GoRoute(
@@ -146,6 +153,10 @@ class SlimcaShell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // 底栏重设计（拍板：凹槽花瓣底栏；定型条目《UI-规范与重设计》§5 #14、
+    // §2.2 增补段，《大厂设计规范》§7.2 决策）：颜色一律走 SlimcaTheme
+    // 语义 token（§8.2 禁裸色）。
+    final slimca = context.slimca;
     return Scaffold(
       // IndexedStack 承载各分支导航栈；切 Tab 不重建、保留各自栈内状态。
       body: navigationShell,
@@ -158,6 +169,14 @@ class SlimcaShell extends ConsumerWidget {
         // 同一 captureControllerProvider，两通道同一条 AI 解析管线；归属日取
         // 仪表盘当前选中日（§3.2）。编辑路径（修正链 §3.4）仍直达
         // showCaptureSheet 的 W2 表单，不经通道切换。
+        //
+        // 底栏重设计：类型/tooltip/hero/onPressed 遥测链全不动（11 个测试
+        // 文件语义查找 0 改动）；仅形态换花瓣（M3 Expressive cookie，拍板
+        // 推导，见 SlimcaCookieShapeBorder）、显式取 primary/onPrimary——
+        // 全屏唯一显著填充元素（§3 P12），凹槽 cradle 承接见 bottomNavigationBar。
+        shape: const SlimcaCookieShapeBorder(),
+        backgroundColor: slimca.primary,
+        foregroundColor: slimca.onPrimary,
         onPressed: () {
           // W9-10 录入漏斗首步「打开」（§2.3「打开→输入→解析→确认」、
           // §11.1 W9-10「北极星实测·录入漏斗」）：抽屉唤起即记（W7-8 只埋
@@ -187,31 +206,56 @@ class SlimcaShell extends ConsumerWidget {
       ),
       // 「+」悬浮于底部中央，与 4 Tab 并列（§4.1 原则 2）。
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: navigationShell.currentIndex,
-        onDestinationSelected: navigationShell.goBranch,
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.today_outlined),
-            selectedIcon: Icon(Icons.today),
-            label: '今天',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.account_balance_wallet_outlined),
-            selectedIcon: Icon(Icons.account_balance_wallet),
-            label: '账本',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.event_note_outlined),
-            selectedIcon: Icon(Icons.event_note),
-            label: '计划',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: '我的',
-          ),
-        ],
+      // 一体化底栏（底栏重设计拍板，定型条目《UI-规范与重设计》§5 #14、
+      // §2.2 增补段，《大厂设计规范》§7.2 决策）：BottomAppBar 框架凹槽
+      // CircularNotchedRectangle 承接花瓣 FAB（零自绘 Path）；notchMargin
+      // 显式 6（框架默认 4，固化拍板口径 → 凹槽半径 34 > 花瓣尖 28，间隙环
+      // 6dp 透出页面底）；clipBehavior 显式 antiAlias——缺省 Clip.none 下
+      // NavigationBar 子树不随凹槽路径裁剪，选中指示器 pill 会悬画进凹槽
+      // 缺口（paint 不裁剪、hitTest 却按路径拒绝），360dp 下与「账本/计划」
+      // pill 相交的月牙区被污染；海拔沿框架档（bottom bar level0，大厂规范
+      // §6.6 海拔不另建自绘体系），显式 0 去旧默认叠影；材质延伸至手势条后
+      // 由框架自理（BottomAppBar 自带 SafeArea 消费底部 inset，NavigationBar
+      // 内部 SafeArea 次级）——子树勿再响应 viewInsets 造成双重避让。
+      // 栏底 surfaceCard（UI-规范与重设计.md §4 采用决策 2 表面三档，禁引
+      // colorScheme.surfaceContainer）。
+      bottomNavigationBar: BottomAppBar(
+        color: slimca.surfaceCard,
+        shape: const CircularNotchedRectangle(),
+        notchMargin: 6,
+        clipBehavior: Clip.antiAlias,
+        elevation: 0,
+        child: NavigationBar(
+          // NavigationBar 类型/80dp 默认高度/4 destination 逐字不动（§2.2
+          // 「框架默认即合规」基线）；仅背景透明让 BottomAppBar 凹槽轮廓与
+          // surfaceCard 栏底透出、elevation 显式回落 level0 去矩形叠影。
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          selectedIndex: navigationShell.currentIndex,
+          onDestinationSelected: navigationShell.goBranch,
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.today_outlined),
+              selectedIcon: Icon(Icons.today),
+              label: '今天',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.account_balance_wallet_outlined),
+              selectedIcon: Icon(Icons.account_balance_wallet),
+              label: '账本',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.event_note_outlined),
+              selectedIcon: Icon(Icons.event_note),
+              label: '计划',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outline),
+              selectedIcon: Icon(Icons.person),
+              label: '我的',
+            ),
+          ],
+        ),
       ),
     );
   }

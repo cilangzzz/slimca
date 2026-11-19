@@ -49,20 +49,52 @@ class TodayDashboardPage extends ConsumerStatefulWidget {
 }
 
 class _TodayDashboardPageState extends ConsumerState<TodayDashboardPage> {
+  /// 首页日历展开态（受控；SlimcaCalendar 内垂直手势/收起箭头回发，§3.2）。
+  bool _calendarExpanded = false;
+
   @override
   Widget build(BuildContext context) {
     final selectedDate = ref.watch(selectedDateProvider);
+    // 月格色点（§3.2 Compact：一点=有记录；day_summary 投影 watch 直出）。
+    final recordedDays =
+        ref.watch(recordedDaysProvider).value ?? const <String>{};
     final wallKey = ValueKey<DateTime>(selectedDate);
+    final spacing = context.spacing;
+    final sizes = context.sizes;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Slimca'), centerTitle: false),
+      // 首页 AppBar 不带产品名标题（用户拍板：去除「Slimca」字样，
+      // 状态栏下直接呈现卡片墙）。
+      appBar: AppBar(centerTitle: false),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+          // 底部留白（底栏重设计拍板（《UI-规范与重设计》§2.2 增补段））：清中央花瓣按钮凸出栏体
+          // （cradle 间隙约 34）+ 呼吸——space600+rowSingleLine+space200
+          // 组合表达（§2.2 禁裸尺寸，不引入裸值）。
+          padding: EdgeInsets.fromLTRB(
+            spacing.space200,
+            spacing.space100,
+            spacing.space200,
+            spacing.space600 + sizes.rowSingleLine + spacing.space200,
+          ),
           children: [
             _DateHeader(date: selectedDate),
             const SizedBox(height: 12),
-            _WeekStrip(selected: selectedDate),
+            // 首页日历（§3 定稿组合容器）：折叠=周条，垂直下拉/箭头展开
+            // 月网格选择具体日期（用户拍板 2026-11-19）；选中日单一真值
+            // selectedDateProvider（§3.1④）。
+            SlimcaCalendar(
+              selectedDate: selectedDate,
+              onDaySelected: (day) =>
+                  ref.read(selectedDateProvider.notifier).select(day),
+              recordCounts: <DateTime, int>{
+                for (final String date in recordedDays)
+                  DateTime.parse(date): 1,
+              },
+              expanded: _calendarExpanded,
+              onExpandedChanged: (bool expanded) =>
+                  setState(() => _calendarExpanded = expanded),
+            ),
             const SizedBox(height: 20),
             // 左右滑切日：共享轴转场 280ms（§3.2、§9.3 转场 #2——方向感知与
             // 卡片 FLIP 位置保持随转场 #2 完整实现接入）。
@@ -149,85 +181,6 @@ class _DateHeader extends StatelessWidget {
 ///
 /// 展示选中日期所在周的 7 天（周一为起点）；点选任意日切换当日视图。
 /// 无限横滑翻周与月历下钻（§3.2 月历下钻，Container Transform）随 W2+ 接入。
-class _WeekStrip extends ConsumerWidget {
-  const _WeekStrip({required this.selected});
-
-  final DateTime selected;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final cs = Theme.of(context).colorScheme;
-    final now = SelectedDate.normalizeDate(DateTime.now());
-    final days = SelectedDate.weekOf(selected);
-    const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
-
-    return Row(
-      children: [
-        for (var i = 0; i < days.length; i++)
-          Expanded(child: Builder(builder: (context) {
-            final day = days[i];
-            final isSelected = day == selected;
-            final isToday = day == now;
-            // §5 审计 #2 修正：原格间水平 padding 3px 违反「格间距 ≥8dp」，
-            // 改为 M3 date-picker 解剖（§1.5/§3.3）——InkWell 命中占满整格
-            // （命中≈整格宽×格高≥48dp），视觉容器左右内缩 2dp → 相邻格
-            // 视觉 gap 4（「视觉 gap 4 + 命中留白」，§5 #2 修正动作）；
-            // 选中态=颜色变化属 effects 类（禁过冲），AnimatedContainer
-            // durM+easeOutCubic 合规保留。
-            return InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () => ref.read(selectedDateProvider.notifier).select(day),
-              child: AnimatedContainer(
-                duration: MotionConfig.of(context).durM, // §9.2 dur.m
-                curve: Curves.easeOutCubic,
-                margin: EdgeInsets.symmetric(horizontal: i == 6 ? 0 : 2),
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? cs.primaryContainer
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      weekdayLabels[i],
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: cs.onSurfaceVariant,
-                          ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${day.day}',
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: isSelected ? cs.onPrimaryContainer : null,
-                          ),
-                    ),
-                    const SizedBox(height: 4),
-                    // 今日指示点：帮助用户在周历上锚定「今天」。
-                    SizedBox(
-                      width: 4,
-                      height: 4,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: isToday
-                              ? cs.primary
-                              : Colors.transparent,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          })),
-      ],
-    );
-  }
-}
-
 /// 卡片墙（§3.2：热量环/支出/运动/待办/存钱进度 + 今日记录）。
 ///
 /// - 数据：明细行 join 流实时聚合（dashboardDayProvider，§6.1 原则 3）；
@@ -803,30 +756,36 @@ class _SavingsCard extends ConsumerWidget {
 
     if (progress.isEmpty) {
       return _DashboardCard(
-        child: Row(
-          children: [
-            Icon(
-              Icons.savings_outlined,
-              color: tokens.onSurfaceMuted,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('存钱', style: textTheme.titleMedium),
-                  const SizedBox(height: 4),
-                  Text(
-                    '还没有存钱目标。去「计划」页新建目标，'
-                    '投币打卡攒起来（§3.6 存钱目标）',
-                    style: textTheme.bodyMedium?.copyWith(
-                      color: tokens.onSurfaceMuted,
-                    ),
-                  ),
-                ],
+        // 空态可点（修复「文案说去计划页却不可点」缺口）：整卡跳计划 Tab
+        // 存钱卡（唯一建档入口）。
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => context.go('/plan'),
+          child: Row(
+            children: [
+              Icon(
+                Icons.savings_outlined,
+                color: tokens.onSurfaceMuted,
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('存钱', style: textTheme.titleMedium),
+                    const SizedBox(height: 4),
+                    Text(
+                      '还没有存钱目标。去「计划」页新建目标，投币打卡攒起来',
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: tokens.onSurfaceMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: tokens.onSurfaceMuted),
+            ],
+          ),
         ),
       );
     }

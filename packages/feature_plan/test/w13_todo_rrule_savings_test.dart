@@ -187,8 +187,9 @@ Future<cdb.DaySummary?> _summaryFor(_Harness harness, String date) async {
 
 void main() {
   testWidgets(
-    '重复待办：当日展开不重复落行 + 提醒字段 + 勾选联动投影 + 编辑改档'
-    '（§3.6 完整版 / §5.5⑩ / §5.6 / §11.2 W13）',
+    '重复待办（收集箱建档）：单行不重复落行 + 提醒字段 + 勾选行级完成 + '
+    '编辑改档（§3.6 完整版 / §5.5⑩ / §11.2 W13；IA 重设计后 TodoPage=收集箱，'
+    '勾选投影联动由壳层今日待办卡与 core_db 测试覆盖）',
     (tester) async {
       final harness = _Harness();
       if (!await harness.init()) return;
@@ -198,7 +199,8 @@ void main() {
 
       await _pumpTodoPage(tester, harness);
 
-      // ① 编辑抽屉新建「每天」重复待办（重复规则 + 提醒，§3.6 W13）。
+      // ① 编辑抽屉新建「每天」重复待办（收集箱计划日=null：重复自保存日
+      //    起展开，锚点=保存日，§3.6 W13）。
       await tester.tap(find.byKey(todoAdvancedKey));
       await _pumpUntilFound(tester, find.byKey(todoEditorTitleKey));
       await _enterField(tester, todoEditorTitleKey, '晨跑');
@@ -210,8 +212,8 @@ void main() {
       expect(find.text('09:00'), findsOneWidget);
       await tester.tap(find.byKey(todoEditorSaveKey));
 
-      // ② 当日展开不重复落行（§11.2 W13 展开策略）：todos 恰 1 行、
-      //    瓦片恰 1 枚、规则/锚点/提醒字段落库正确。
+      // ② 不预生成实例行（§11.2 W13 展开策略）：todos 恰 1 行、瓦片恰 1 枚、
+      //    规则/锚点/提醒字段落库正确（收集箱行 date=null、锚点=保存日）。
       await _pumpUntilDb(
         tester,
         () async =>
@@ -225,23 +227,25 @@ void main() {
       expect(rows, hasLength(1), reason: '重复待办不预生成实例行（W13 取舍）');
       final todo = rows.single;
       expect(todo.repeatRule, 'FREQ=DAILY;INTERVAL=1');
-      expect(todo.rruleAnchorDate, today, reason: '锚点缺省=计划日（DTSTART）');
+      expect(todo.rruleAnchorDate, today, reason: '收集箱行锚点自保存日起');
       expect(todo.remindAt, remindAtMsFor(day: today, hour: 9, minute: 0));
-      expect(todo.date, today);
+      expect(todo.date, isNull, reason: '收集箱行无计划日（§5.5⑩）');
       await _pumpUntilFound(tester, find.text('晨跑'));
-      expect(find.text('晨跑'), findsOneWidget,
-          reason: '当日实例虚拟展开且锚点日不重复渲染');
+      expect(find.text('晨跑'), findsOneWidget);
       expect(find.textContaining('每天'), findsOneWidget,
           reason: '重复规则摘要标签');
 
-      // ③ 勾选 → 基行 done_at 落实例日 + 投影 todo_done=1（锚点日即基行
-      //    date，§5.6 重建规则；done_at 只前进合并 §6.5）。
+      // ③ 勾选 → 基行 done_at 落行级完成（done_at 只前进合并 §6.5；
+      //    收集箱行不进日投影——投影联动由壳层今日待办卡覆盖）。
       await tester.tap(find.byKey(todoCheckKey(todo.id)));
       await _pumpUntilDb(
         tester,
         () async =>
-            (await _summaryFor(harness, today))?.todoDone == 1 &&
-            (await _summaryFor(harness, today))?.todoTotal == 1,
+            (await _allTodos(harness))
+                    .where((t) => t.id == todo.id)
+                    .single
+                    .doneAt !=
+                null,
       );
 
       // ④ 编辑改档「每 3 天」（点瓦片标题 → 编辑抽屉）：规则更新、锚点

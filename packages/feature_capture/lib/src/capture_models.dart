@@ -54,57 +54,6 @@ enum CaptureAiStage {
   manualFallback,
 }
 
-/// 最近 chip 条数（§2.4「最近记录 chip 复记 ≤5 秒」；W3-4 主线取 5 条横滑，
-/// 文档 §2.4/§3.3 基线为 3 条，此处按 W3-4 实现口径取 5，常量可调）。
-const int kRecentChipLimit = 5;
-
-/// 最近记录 chip 的数据（§2.4-1：一键带入，日期刷新到今天、份量金额可微调）。
-class CaptureRecentEntry {
-  const CaptureRecentEntry({
-    required this.entryId,
-    required this.title,
-    required this.date,
-    required this.kind,
-    required this.moneyDirection,
-    this.kcal,
-    this.moneyMinor,
-    this.categoryId,
-    this.ledgerId,
-    this.categoryName,
-  });
-
-  /// 原事件主干 id（复记生成新事件，不复用旧行 id，§2.1①）。
-  final String entryId;
-
-  /// 原标题（chip 文案与复记预填）。
-  final String title;
-
-  /// 原归属日（chip 复记时刷新为今天，§2.4-1）。
-  final String date;
-  final dom.EntryKind kind;
-
-  /// 原 active calorie 行热量（kcal）。
-  final int? kcal;
-
-  /// 原 active money 行金额（分）。
-  final int? moneyMinor;
-  final dom.LineDirection moneyDirection;
-  final String? categoryId;
-  final String? ledgerId;
-
-  /// 分类名（chip 摘要展示）。
-  final String? categoryName;
-
-  /// chip 摘要行（如「550 kcal · ¥18.50」）。
-  String get summary {
-    final parts = <String>[
-      if (kcal != null) '$kcal kcal',
-      if (moneyMinor != null) '¥${CaptureMoney.fromMinorUnits(moneyMinor!)}',
-    ];
-    return parts.join(' · ');
-  }
-}
-
 /// AI 初值快照（§5.6⑮ corrections 差异审计的「前值」侧：AI 预填 vs 用户确认）。
 ///
 /// 复记（chip）与手动降级提交没有 AI 初值（null），不写差异审计行。
@@ -370,7 +319,6 @@ class CaptureFormState {
     this.portionMultiplier = 1.0,
     this.manualKcalText = '',
     this.fallbackHint,
-    this.recentEntries = const [],
     this.pendingSource = dom.EntrySource.text,
     this.pendingMoneyDirection = dom.LineDirection.outcome,
   });
@@ -451,9 +399,6 @@ class CaptureFormState {
 
   /// 解析失败提示（降级表单顶部横幅，§7.4）。
   final String? fallbackHint;
-
-  /// 最近记录 chips（§2.4 复记 ≤5s）。
-  final List<CaptureRecentEntry> recentEntries;
 
   /// 待提交来源（确认=AI text / chip=复记 / 降级=manual / 拍照通道=photo
   /// （含拍照降级手填，§11.2 W11-12），§5.2① source）。
@@ -573,7 +518,6 @@ class CaptureFormState {
     double? portionMultiplier,
     String? manualKcalText,
     Object? fallbackHint = _unchanged,
-    List<CaptureRecentEntry>? recentEntries,
     dom.EntrySource? pendingSource,
     dom.LineDirection? pendingMoneyDirection,
   }) =>
@@ -627,7 +571,6 @@ class CaptureFormState {
         fallbackHint: identical(fallbackHint, _unchanged)
             ? this.fallbackHint
             : fallbackHint as String?,
-        recentEntries: recentEntries ?? this.recentEntries,
         pendingSource: pendingSource ?? this.pendingSource,
         pendingMoneyDirection: pendingMoneyDirection ?? this.pendingMoneyDirection,
       );

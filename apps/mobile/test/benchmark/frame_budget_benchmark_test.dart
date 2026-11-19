@@ -33,6 +33,8 @@ import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
 import 'package:feature_capture/feature_capture.dart'
     show captureGatewayProvider, captureParserProvider, createCaptureGateway;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -103,6 +105,9 @@ Future<void> _pumpApp(
         captureGatewayProvider
             .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
         captureParserProvider.overrideWithValue(createCaptureParser()),
+        planGatewayProvider.overrideWithValue(
+          createPlanGateway(db: database, clock: clock),
+        ),
       ],
       child: const SlimcaApp(),
     ),
@@ -123,7 +128,8 @@ void main() {
     // pumpWidget 只跑一帧——此刻就应出现完整壳与零值空态（无 spinner，
     // 加载分支共用 DashboardDay.zero，§2.3 步 0「无加载态空屏」）。
     await _pumpApp(tester, database);
-    expect(find.text('Slimca'), findsOneWidget, reason: '首帧即完整壳');
+    expect(find.text('Slimca'), findsNothing,
+        reason: '首帧即完整壳（首页 AppBar 无产品名标题，用户拍板移除）');
     expect(find.text('记一件事，钱和卡路里一起入账'), findsOneWidget,
         reason: '首帧即零值空态（无加载骨架）');
   });

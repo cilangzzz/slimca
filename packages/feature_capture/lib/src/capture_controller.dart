@@ -114,14 +114,6 @@ class CaptureController extends AsyncNotifier<CaptureFormState> {
       categoryId = null;
     }
 
-    // 最近记录 chips（§2.4 复记 ≤5s）：装载失败不阻塞抽屉（空列表退化）。
-    List<CaptureRecentEntry> recentEntries = const [];
-    try {
-      recentEntries = await gateway.loadRecentEntries(limit: kRecentChipLimit);
-    } catch (_) {
-      recentEntries = const [];
-    }
-
     return CaptureFormState(
       side: side,
       amountText: amountText,
@@ -138,7 +130,6 @@ class CaptureController extends AsyncNotifier<CaptureFormState> {
       submitting: false,
       errorText: null,
       aiStage: CaptureAiStage.input,
-      recentEntries: recentEntries,
     );
   }
 
@@ -146,38 +137,9 @@ class CaptureController extends AsyncNotifier<CaptureFormState> {
 
   // ── W2 手动 money 表单（§3.3 写通道/§3.4）──────────────────────
 
-  /// 键入数字（分存储转换延迟到提交时，§5.1 整数分）。
-  void inputDigit(String digit) {
-    final current = state.value;
-    if (current == null) return;
-    _apply(current.copyWith(
-      amountText: CaptureMoney.appendDigit(current.amountText, digit),
-      errorText: null,
-    ));
-  }
-
-  /// 键入小数点。
-  void inputDot() {
-    final current = state.value;
-    if (current == null) return;
-    _apply(current.copyWith(
-      amountText: CaptureMoney.appendDot(current.amountText),
-      errorText: null,
-    ));
-  }
-
-  /// 退格。
-  void backspace() {
-    final current = state.value;
-    if (current == null) return;
-    _apply(current.copyWith(
-      amountText: CaptureMoney.backspace(current.amountText),
-      errorText: null,
-    ));
-  }
-
-  /// 金额文本直写（确认卡「金额点改」与降级表单的 TextField，§3.3）：
-  /// 合法性延迟到提交判定（[CaptureFormState.amountMinor] 为 null 即禁用）。
+  /// 金额文本直写（确认卡「金额点改」、money 表单滚动金额字段与降级表单
+  /// 的 TextField，§3.3）：合法性延迟到提交判定
+  /// （[CaptureFormState.amountMinor] 为 null 即禁用）。
   void setAmountText(String text) {
     final current = state.value;
     if (current == null) return;
@@ -492,45 +454,6 @@ class CaptureController extends AsyncNotifier<CaptureFormState> {
       // 拍照通道：待焚原件随确认卡进入提交链（§11.2 即焚推迟到落库成功）；
       // 文本路径传 null=无拍照痕迹。呼吸态分段文案同时清空。
       pendingPhoto: pendingPhoto,
-      photoProcessingLabel: null,
-    ));
-  }
-
-  /// 最近 chip 复记（§2.4-1「一键带入：日期刷新到今天、份量金额可微调」）：
-  /// 整卡预填（标题/热量/金额/分类/账本），无 AI 初值 → 不产差异审计行；
-  /// source=chip（§5.2①）。
-  void applyRecentChip(CaptureRecentEntry chip) {
-    final current = state.value;
-    if (current == null) return;
-    // chip 复记让位拍照通道：待焚原件即刻弃置（state 清空 + 文件尽力删除；
-    // 行尚未登记，无焚语义，§11.2）。
-    unawaited(_deleteTempFile(current.pendingPhoto?.localPath));
-    final includeMoney = current.side != CaptureSide.calorie;
-    final kcal = current.side == CaptureSide.money ? null : chip.kcal;
-    _apply(current.copyWith(
-      aiStage: CaptureAiStage.confirm,
-      parseResult: null,
-      parseFromCache: false,
-      aiParseId: null,
-      aiInitials: null,
-      title: chip.title,
-      note: '',
-      confirmKcal: kcal,
-      portionBaseKcal: kcal,
-      portionMultiplier: 1.0,
-      amountText: includeMoney && chip.moneyMinor != null
-          ? CaptureMoney.fromMinorUnits(chip.moneyMinor!)
-          : '',
-      categoryId: chip.categoryId,
-      ledgerId: chip.ledgerId ?? current.ledgerId,
-      // 日期刷新到今天（§2.4-1）。
-      date: dom.formatCalendarDay(DateTime.now()),
-      manualKcalText: '',
-      fallbackHint: null,
-      errorText: null,
-      pendingSource: dom.EntrySource.chip,
-      pendingMoneyDirection: chip.moneyDirection,
-      pendingPhoto: null,
       photoProcessingLabel: null,
     ));
   }

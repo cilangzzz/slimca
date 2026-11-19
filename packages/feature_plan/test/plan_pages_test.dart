@@ -1,9 +1,12 @@
-/// 计划域页面骨架测试（§4.2 计划 Tab 三卡 + W5-6 占位页验收）。
+/// 计划域页面骨架测试（计划域 IA 重设计后：L1 域管理页直测——宿主 TodayPlan
+/// 页的接线 e2e 在 apps/mobile 侧）。
 ///
 /// 内存真库（NativeDatabase.memory）；断言：
-/// 1. PlanHubPage 渲染 4 张入口卡（待办/健身/存钱/健身计划，§4.2）；
-/// 2. SavingsPage / FitnessPlanPage 空库渲染空态引导（W13/W14 占位，
-///    §3.6/§3.5），读侧 reactive 流接通不报错。
+/// 1. FitnessLogPage 表单骨架渲染（10 活动/时长/体重/历史入口，§3.5）；
+/// 2. SavingsPage 空库渲染空态引导（W13，§3.6），读侧 reactive 流接通；
+/// 3. FitnessPlanPage 空库渲染空态引导（W14，§3.5），读侧 reactive 流接通；
+///    开练入口不在本页（唯一开练入口在壳层计划 Tab「今日健身」卡，单一
+///    入口纪律），训练历史入口挂在 FitnessLogPage AppBar。
 ///
 /// 运行前提：集成阶段已 `flutter pub get`；宿主缺 sqlite3 运行库时温和跳过。
 library;
@@ -93,7 +96,7 @@ Future<void> _pumpPage(WidgetTester tester, _Harness harness, Widget page,
 
 void main() {
   testWidgets(
-    'PlanHubPage 渲染四张入口卡（今日待办/健身手动记录/存钱目标/健身计划，§4.2）',
+    'FitnessLogPage 表单骨架（10 活动 × 强度档 + 时长/体重/估算 + 历史入口，§3.5）',
     (tester) async {
       final harness = _Harness();
       if (!await harness.init()) return;
@@ -102,22 +105,25 @@ void main() {
       await _pumpPage(
         tester,
         harness,
-        const PlanHubPage(),
-        waitFor: find.text('健身手动记录'),
+        const FitnessLogPage(),
+        waitFor: find.byKey(fitnessSubmitKey),
       );
-      expect(find.text('今日待办'), findsOneWidget);
-      expect(find.text('健身手动记录'), findsOneWidget);
-      expect(find.text('存钱目标'), findsOneWidget);
-      expect(find.text('健身计划'), findsOneWidget);
-      // W13 存钱主线、W14 健身计划主线均已上线（§11.2 W13/W14）。
-      expect(find.text('365/52 周/自定义 + 投币打卡（§3.6）'), findsOneWidget);
-      expect(find.text('模板排期 + 组间计时（§3.5 P1）'), findsOneWidget);
+      // 表单骨架：内置 MET 表活动 chips + 时长/体重输入 + 估算值锚。
+      expect(find.byKey(fitnessDurationFieldKey), findsOneWidget);
+      expect(find.byKey(fitnessWeightFieldKey), findsOneWidget);
+      expect(find.byKey(fitnessEstimateKey), findsOneWidget);
+      expect(find.text('慢跑'), findsOneWidget);
+      expect(find.text('力量训练'), findsOneWidget);
+      // 训练历史入口（唯一入口挂在记录页 AppBar，§3.5）。
+      expect(find.byKey(fitnessHistoryKey), findsOneWidget);
+      // 归属日导航（按日查看；IconButton tooltip 断言）。
+      expect(find.byTooltip('前一日'), findsOneWidget);
+      expect(find.byTooltip('后一日'), findsOneWidget);
     },
   );
 
   testWidgets(
-    'SavingsPage 空态引导（W13 全量：三种存钱法 + 投币打卡心智，'
-    '§3.6/§5.5⑪⑫/§11.2 W13）',
+    'SavingsPage 空态引导（W13 全量：三种存钱法 + 投币打卡心智，§3.6/§5.5⑪⑫）',
     (tester) async {
       final harness = _Harness();
       if (!await harness.init()) return;
@@ -139,8 +145,7 @@ void main() {
   );
 
   testWidgets(
-    'FitnessPlanPage 空态引导（W14 全量：模板/排期/组明细心智，'
-    '§3.5/§5.5⑧⑨/§11.2 W14）',
+    'FitnessPlanPage 空态引导（W14 全量：模板/排期心智，§3.5/§5.5⑧⑨）',
     (tester) async {
       final harness = _Harness();
       if (!await harness.init()) return;
@@ -153,11 +158,12 @@ void main() {
         waitFor: find.text('开始你的第一个健身计划'),
       );
       expect(find.text('开始你的第一个健身计划'), findsOneWidget);
-      expect(find.textContaining('exercise_sets'), findsOneWidget);
-      // 新建计划入口（AppBar + 空态 CTA）与训练历史入口（§11.2 W14）。
+      expect(find.textContaining('按周排期'), findsOneWidget);
+      // 新建计划入口（AppBar + 空态 CTA）。
       expect(find.byKey(fitnessPlanCreateKey), findsOneWidget);
       expect(find.byKey(fitnessPlanEmptyCreateKey), findsOneWidget);
-      expect(find.byKey(fitnessHistoryKey), findsOneWidget);
+      // 单一入口纪律：开练入口不在管理页（唯一在壳层「今日健身」卡排期行）。
+      expect(find.text('开练'), findsNothing);
     },
   );
 }

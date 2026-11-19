@@ -20,7 +20,6 @@
 ///   adapter 在 core_ai，宿主桥接 override；测试注入 Fake，禁真实网络）；
 /// - input_hash 缓存（§3.3/§5.6⑭ sha256 + UUIDv7 内嵌时间戳 7 天时效）；
 /// - 失败降级（§7.4）：结构化失败/超时 → 自动手填表单，原文保留；
-/// - 最近记录 chip 复记（§2.4-1 ≤5 秒，[kRecentChipLimit] 条横滑）；
 /// - 单边开关（§3.3）：钱+热量 / 仅记钱 / 仅记热量（kcal-only 只产 calorie 行）。
 ///
 /// W11-12 主线「拍照通道」（§11.2、§3.3 拍照通道、§3.7 数据主权、§5.6㉑）：
@@ -89,11 +88,12 @@ export 'src/widgets/capture_ai_input.dart';
 export 'src/widgets/capture_amount_input.dart';
 export 'src/widgets/capture_category_picker.dart';
 export 'src/widgets/capture_confirm_card.dart';
+export 'src/widgets/capture_confirm_stage.dart';
 export 'src/widgets/capture_date_row.dart';
 export 'src/widgets/capture_direction_toggle.dart';
+export 'src/widgets/capture_error_text.dart';
 export 'src/widgets/capture_ledger_picker.dart';
 export 'src/widgets/capture_parsing_state.dart';
 export 'src/widgets/capture_photo_entry.dart';
-export 'src/widgets/capture_recent_chips.dart';
 export 'src/widgets/capture_side_toggle.dart';
 export 'src/widgets/capture_text_field.dart';

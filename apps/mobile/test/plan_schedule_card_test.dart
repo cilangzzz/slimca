@@ -20,6 +20,8 @@ import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
 import 'package:feature_capture/feature_capture.dart'
     show captureGatewayProvider, captureParserProvider, createCaptureGateway;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -176,23 +178,28 @@ void main() {
           workoutTimerNotifierProvider.overrideWithValue(notifier),
           telemetryServiceProvider.overrideWithValue(telemetry),
           workoutClockProvider.overrideWithValue(() => fakeNow),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),
     );
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('Slimca'), findsOneWidget);
+    expect(find.text('Slimca'), findsNothing,
+        reason: '完整壳已起（首页 AppBar 无产品名标题，用户拍板移除）');
 
-    // ── 计划 Tab：健身计划卡（§11.2 W14 任务 1）──────────────────────
+    // ── 计划 Tab：今日健身卡（§11.2 W14 任务 1；IA 重设计后卡尾「健身计划」
+    //    为唯一模板入口）───────────────────────────────────────────────
     await tester.tap(find.text('计划'));
     await tester.pumpAndSettle();
     expect(find.byKey(planWorkoutCardKey), findsOneWidget);
     expect(find.text('健身计划'), findsOneWidget);
 
-    // 排期分流：A 命中今日 → 排期行（名称在排期段+计划段共 2 处）；
-    // B 不命中 → 仅计划段 1 处、无其「开始训练」按钮。
-    expect(find.text('三分化 · 推日'), findsNWidgets(2));
-    expect(find.text('二分化 · 腿日'), findsOneWidget);
+    // 排期分流：A 命中今日 → 排期行（计划列表段已下沉 /plan/plans，单现）；
+    // B 不命中今日 → 不出现排期行、无其「开始训练」按钮。
+    expect(find.text('三分化 · 推日'), findsOneWidget);
+    expect(find.text('二分化 · 腿日'), findsNothing);
     expect(find.byKey(planWorkoutStartKey(planA.id)), findsOneWidget);
     expect(find.byKey(planWorkoutStartKey('plan-w14-b')), findsNothing);
 

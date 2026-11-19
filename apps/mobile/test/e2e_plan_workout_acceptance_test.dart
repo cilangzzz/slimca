@@ -197,7 +197,8 @@ void main() {
       ),
     );
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('Slimca'), findsOneWidget);
+    expect(find.text('Slimca'), findsNothing,
+        reason: '完整壳已起（首页 AppBar 无产品名标题，用户拍板移除）');
 
     // ── ① 新建计划模板（feature_plan 编辑器，排期周三）──────────────────
     await tester.tap(find.text('计划'));
@@ -241,8 +242,9 @@ void main() {
         .read(selectedDateProvider.notifier)
         .select(wednesday);
     await tester.pumpAndSettle();
-    expect(find.text('推日力量'), findsNWidgets(2),
-        reason: '排期行 + 计划列表行各一处（plan_schedule_card_test 同口径）');
+    expect(find.text('推日力量'), findsOneWidget,
+        reason: '排期行唯一渲染（IA 重设计后计划列表段下沉 /plan/plans，'
+            'plan_schedule_card_test 同口径改单现）');
     expect(find.byKey(planWorkoutStartKey(plan.id)), findsOneWidget);
 
     // ── ③ 排期卡「开始训练」→ 壳层训练流（KeepAwake on + 常驻通知 + 漏斗）──
@@ -304,7 +306,7 @@ void main() {
     expect(find.textContaining('训练中 · 推日力量'), findsOneWidget);
     expect(find.text('已完成 3 组'), findsOneWidget);
     await tester.tap(find.byKey(workoutCardEndKey));
-    await _pumpUntilFound(tester, find.text('-10'));
+    await _pumpUntilFound(tester, find.text('-12'));
 
     // 副作用收尾：KeepAwake off + 常驻通知 cancel + workout_completed。
     expect(keepAwake.calls, ['enable', 'disable']);
@@ -325,9 +327,10 @@ void main() {
     expect(session.date, wednesdayStr);
     expect(session.entryId, isNotNull, reason: 'entry 随完成训练联动（§5.5⑦）');
     // 时长=注入时钟差 90s → durationMinutes=2（ceil）；kcal=MET 估算
-    // 5.0 × 60kg × (2/60)h = 10（§3.5 估算式，±20% 口径标注在 UI 层）。
+    // 5.0 × 70kg × (2/60)h = 12（§3.5 估算式，±20% 口径标注在 UI 层；
+    // 身体档案缺省 70kg——与 feature_plan 网关同一常量，双基线已收敛）。
     expect(session.durationS, 90);
-    expect(session.kcalBurn, 10);
+    expect(session.kcalBurn, 12);
 
     final sets = await database.select(database.exerciseSets).get();
     expect(sets.length, 3);
@@ -356,7 +359,7 @@ void main() {
     final burn = lines.single;
     expect(burn.type, 'burn');
     expect(burn.direction, 'out');
-    expect(burn.amount, 10);
+    expect(burn.amount, 12);
     expect(burn.entryId, entry.id);
 
     // ── ⑦ §6.2 出网纪律：业务行快照全部同事务入队（含模板行）────────────
@@ -376,7 +379,7 @@ void main() {
     // ── ⑧ day_summary 投影联动（§5.6 重建规则）：当日 kcal_out/net 重算 ────
     final summaries = await database.select(database.daySummaries).get();
     final summary = summaries.singleWhere((s) => s.date == wednesdayStr);
-    expect(summary.kcalOut, 10);
-    expect(summary.netKcal, -10);
+    expect(summary.kcalOut, 12);
+    expect(summary.netKcal, -12);
   });
 }

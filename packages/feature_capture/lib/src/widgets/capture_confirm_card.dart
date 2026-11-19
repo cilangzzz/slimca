@@ -22,6 +22,7 @@ import '../capture_controller.dart';
 import '../capture_models.dart';
 import 'capture_category_picker.dart';
 import 'capture_date_row.dart';
+import 'capture_error_text.dart';
 import 'capture_ledger_picker.dart';
 import 'capture_text_field.dart';
 
@@ -54,11 +55,17 @@ class CaptureConfirmCard extends StatelessWidget {
     required this.form,
     required this.controller,
     required this.onConfirm,
+    this.showActions = true,
   });
 
   final CaptureFormState form;
   final CaptureController controller;
   final Future<void> Function() onConfirm;
+
+  /// 是否内嵌动作区（重新解析 + 确认落库，§2.3 步骤 5）。缺省 true（卡尾
+  /// 页脚）。统一抽屉高度下确认卡经 [CaptureConfirmStage] 以「卡面滚动 +
+  /// 动作页脚钉底」组装——传 false 仅渲染卡面，动作区钉底恒可见。
+  final bool showActions;
 
   @override
   Widget build(BuildContext context) {
@@ -69,7 +76,11 @@ class CaptureConfirmCard extends StatelessWidget {
     return SlimcaConfirmCard(
       key: captureConfirmCardKey,
       header: _badge(context),
-      footer: _actions(context),
+      footer: showActions ? CaptureConfirmActions(
+        form: form,
+        controller: controller,
+        onConfirm: onConfirm,
+      ) : null,
       slots: [
         _slot(
           CaptureTextField(
@@ -128,11 +139,9 @@ class CaptureConfirmCard extends StatelessWidget {
               if (form.errorText != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    form.errorText!,
-                    key: const ValueKey('capture_error_text'),
-                    style:
-                        TextStyle(fontSize: 13, color: context.slimca.danger),
+                  child: CaptureErrorText(
+                    text: form.errorText!,
+                    testKey: const ValueKey('capture_error_text'),
                   ),
                 ),
             ],
@@ -314,8 +323,29 @@ class CaptureConfirmCard extends StatelessWidget {
     );
   }
 
-  /// 页脚：重新解析 + 确认落库（§2.3 步骤 5 按钮区；§3.3 确认后金额不可变）。
-  Widget _actions(BuildContext context) {
+  /// 页脚：重新解析 + 确认落库——实现移至公开组件 [CaptureConfirmActions]
+  /// （统一抽屉高度下动作区可钉底复用，§2.3 步骤 5）。
+}
+
+/// 确认卡动作区：重新解析 + 确认落库（§2.3 步骤 5 按钮区；§3.3 确认后
+/// 金额不可变）。
+///
+/// 两种组装：`CaptureConfirmCard` 内嵌卡尾页脚（缺省），或统一抽屉高度下
+/// 经 [CaptureConfirmStage] 钉底（CTA 恒可见）。
+class CaptureConfirmActions extends StatelessWidget {
+  const CaptureConfirmActions({
+    super.key,
+    required this.form,
+    required this.controller,
+    required this.onConfirm,
+  });
+
+  final CaptureFormState form;
+  final CaptureController controller;
+  final Future<void> Function() onConfirm;
+
+  @override
+  Widget build(BuildContext context) {
     final tokens = context.slimca;
     return Row(
       children: [
@@ -337,10 +367,8 @@ class CaptureConfirmCard extends StatelessWidget {
               foregroundColor: tokens.onPrimary,
               disabledBackgroundColor: tokens.surfaceMuted,
               disabledForegroundColor: tokens.onSurfaceMuted,
-              minimumSize: const Size.fromHeight(48),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
+              minimumSize: Size.fromHeight(context.sizes.minTouchTarget),
+              shape: const StadiumBorder(), // §7.1 按钮胶囊（M3 full）
             ),
             child: form.submitting
                 ? SizedBox(

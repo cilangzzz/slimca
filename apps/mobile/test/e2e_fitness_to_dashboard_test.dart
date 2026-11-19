@@ -19,6 +19,8 @@ import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
 import 'package:feature_capture/feature_capture.dart'
     show captureGatewayProvider, captureParserProvider, createCaptureGateway;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -111,58 +113,66 @@ void main() {
           captureGatewayProvider
               .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
           captureParserProvider.overrideWithValue(createCaptureParser()),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),
     );
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('Slimca'), findsOneWidget);
+    expect(find.text('Slimca'), findsNothing,
+        reason: '完整壳已起（首页 AppBar 无产品名标题，用户拍板移除）');
 
-    // ── 计划 Tab → 记录健身（§4.2 三卡、§4.3 /plan/fitness）─────────
+    // ── 计划 Tab → 记录健身（IA 重设计：卡尾唯一手记入口 → 包版表单页）─
     await tester.tap(find.text('计划'));
     await tester.pumpAndSettle();
-    expect(find.text('待办'), findsOneWidget);
-    expect(find.text('健身'), findsOneWidget);
-    expect(find.textContaining('今日暂无健身记录'), findsOneWidget,
+    expect(find.text('今日待办'), findsOneWidget);
+    expect(find.text('今日健身'), findsOneWidget);
+    expect(find.textContaining('今天没有健身安排'), findsOneWidget,
         reason: '空态引导（§2.3 步 1）');
 
     await tester.tap(find.byKey(const Key('plan_fitness_add')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('归属日'), findsOneWidget,
-        reason: '归属日随仪表盘选中日（§3.2 一切围绕日期）');
+    expect(find.text('健身记录'), findsOneWidget,
+        reason: '包版健身记录页（10 活动 × 3 强度档 + 按日导航）');
 
-    // ── 填表：有氧 30 分钟 × 体重 60kg（§3.5 身体档案缺省回填）───────
-    await tester.tap(find.byKey(const ValueKey('fitness_type_cardio')));
+    // ── 填表：慢跑（cardio，中档 MET 7.0）30 分钟 × 体重 70kg（§3.5 身体
+    //    档案缺省回填——与 feature_plan 网关同一常量，双基线已收敛）──────
+    await tester.tap(find.text('慢跑'));
     await tester.pump();
     await tester.enterText(find.byKey(const Key('fitness_duration_field')), '30');
     await tester.pump();
-    // 体重由 bodyWeightKgProvider 缺省回填 60（settings 未设置 → 估算基线）。
-    // 估算 = MET 7.0 × 60kg × 0.5h = 210 kcal（§3.5 估算式，±20% 口径标注）。
-    await _pumpUntilFound(tester, find.byKey(const Key('fitness_estimate')));
-    expect(find.textContaining('预计消耗 ≈ 210 kcal'), findsOneWidget);
+    // 体重由包表单控制器经 gateway.loadBodyWeightKg 缺省回填 70（settings
+    // 未设置 → 估算基线）。估算 = MET 7.0 × 70kg × 0.5h = 245 kcal
+    // （§3.5 估算式，±20% 口径标注）。
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(find.text('245'), findsOneWidget,
+        reason: '估算 CountUp 终值（fitness_flow_test 同口径）');
     expect(find.textContaining('±20%'), findsOneWidget,
         reason: '§3.5 误差口径标注 P0');
 
-    // ── 保存：同事务落库（§5.5⑦/§6.2）→ 返回计划页 ─────────────────
-    await tester.tap(find.byKey(const Key('fitness_save')));
+    // ── 保存：同事务落库（§5.5⑦/§6.2）→ 返回计划页看已练摘要 ──────────
+    await tester.tap(find.byKey(const Key('fitness_submit')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('fitness_save')), findsNothing,
-        reason: '保存成功返回计划页');
-    // 计划健身卡 reactive stream 即时重发（§6.1 原则 3；轮询容流重发时点）。
-    await _pumpUntilFound(tester, find.text('消耗 210 kcal'));
-    expect(find.text('消耗 210 kcal'), findsOneWidget);
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    // 计划健身卡已练摘要 reactive stream 即时重发（§6.1 原则 3；轮询容流
+    // 重发时点）。
+    await _pumpUntilFound(tester, find.text('消耗 245 kcal'));
+    expect(find.text('今日已练 1 次'), findsOneWidget);
 
     // ── 今天 Tab：仪表盘净热量即时更新（§3.5「消耗进运动条与净热量」）──
     await tester.tap(find.text('今天'));
     await tester.pumpAndSettle();
-    expect(find.text('有氧 30 分钟'), findsOneWidget,
-        reason: '今日记录卡条目（标题=类型+时长）');
-    // 运动条 210（BurnCard 大数 + 热量卡指标行「消耗」两处）。
-    expect(find.text('210 kcal'), findsNWidgets(2),
+    expect(find.text('慢跑 30 分钟'), findsOneWidget,
+        reason: '今日记录卡条目（标题=活动名+时长）');
+    // 运动条 245（BurnCard 大数 + 热量卡指标行「消耗」两处）。
+    expect(find.text('245 kcal'), findsNWidgets(2),
         reason: '消耗=MET 估算值即时入仪表盘（§11.1 W5-6 验收线）');
     expect(find.text('0 kcal'), findsOneWidget, reason: '摄入仍为 0');
-    // 净 = 摄入 − 消耗 = 0 − 210 = −210（环心数字）。
-    expect(find.text('-210'), findsOneWidget, reason: '净热量=摄入−消耗（§3.5）');
+    // 净 = 摄入 − 消耗 = 0 − 245 = −245（环心数字）。
+    expect(find.text('-245'), findsOneWidget, reason: '净热量=摄入−消耗（§3.5）');
     expect(find.text('净 = 摄入 − 消耗'), findsOneWidget,
         reason: '净热量口径标注（W5-6 核对项）');
     expect(find.text('未设置'), findsOneWidget, reason: '预算未设置态（核对项 §4）');
@@ -173,7 +183,7 @@ void main() {
     final session = sessions.single;
     expect(session.type, 'cardio');
     expect(session.durationS, 1800, reason: '时长落库存秒（§5.5⑦ duration_s）');
-    expect(session.kcalBurn, 210, reason: 'MET 估算消耗（§3.5）');
+    expect(session.kcalBurn, 245, reason: 'MET 估算消耗（§3.5）');
     expect(session.source, 'manual', reason: '手动记录（§5.5⑦ source）');
     expect(session.entryId, isNotNull,
         reason: '会话与事件同事务联动（§5.5⑦ entry_id）');
@@ -184,22 +194,22 @@ void main() {
     expect(entry.kind, 'fitness', reason: 'fitness 事件（§5.2①）');
     expect(entry.source, 'manual');
     expect(entry.status, 'confirmed', reason: '手动路径即 confirmed');
-    expect(entry.title, '有氧 30 分钟', reason: '标题缺省=类型+时长（§5.2①）');
+    expect(entry.title, '慢跑 30 分钟', reason: '标题缺省=活动名+时长（§5.2①）');
     expect(entry.id, session.entryId, reason: 'entry_id 联动一致（§5.5⑦）');
 
     final lines = await database.select(database.entryLines).get();
     expect(lines.length, 1);
     final burn = lines.single;
     expect(burn.type, 'burn');
-    expect(burn.amount, 210);
+    expect(burn.amount, 245);
     expect(burn.direction, 'out', reason: 'burn=out（§5.2②）');
     expect(burn.confidence, isNull,
         reason: '人工估算行无 AI 置信度（§5.2②）');
     expect(burn.ledgerId, isNotNull, reason: 'burn 行归集内置 kcal 账本');
     final payload = jsonDecode(burn.payload!) as Map<String, Object?>;
     expect(payload['session_id'], session.id, reason: 'burn 行 payload 记 session_id');
-    expect(payload['met'], 7.0, reason: '有氧 MET 7.0（§3.5 MET 表）');
-    expect(payload['weight_kg'], 60.0, reason: '身体档案体重进 payload');
+    expect(payload['met'], 7.0, reason: '慢跑中档 MET 7.0（§3.5 MET 表）');
+    expect(payload['weight_kg'], 70.0, reason: '身体档案体重进 payload');
 
     final outboxRows = await database.select(database.syncOutbox).get();
     expect(outboxRows.length, 3,
@@ -216,7 +226,7 @@ void main() {
     expect(settingRows.length, 1, reason: '身体档案体重落 settings（§3.5/§5.6⑲）');
     expect(
       double.tryParse(settingRows.single.value.replaceAll('"', '').trim()),
-      60.0,
+      70.0,
     );
   });
 }

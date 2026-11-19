@@ -5,11 +5,18 @@
 /// 我的
 /// ├─ 顶部账号/同步卡（非 ListTile）：同步状态只读一行 + 头像位
 /// │   └─ Pro 状态收进此卡一行小字 pill（不占整行；无购买时不显示）
-/// ├─ 分组「数据与隐私」：原文上云开关 / 拍照原图即焚开关（两 Switch 行迁入）
+/// ├─ 分组「AI 服务」：AI 服务配置入口
 /// ├─ 分组「外观」：主题（副标题=当前包名·深浅色；动效等级在主题编辑面板内）
 /// ├─ 分组「数据」：同步（点击=手动 syncNow）/ 数据导出（占位）
 /// └─ 尾部低频组（与上方隔 Divider）：关于 / 版本 ＋ 独立危险组：清空数据
 /// ```
+///
+/// **「数据与隐私」分组移除决策（用户拍板，无规范出处可引）**：分组头 +
+/// 原文上云开关 / 拍照原图即焚开关两 Switch 行整体移出设置页。底层机制
+/// 保留：raw_input 上云（§3.7/§3.3 默认关）与拍照原图即焚（§11.2 W11-12
+/// 任务 3，默认开）的运行期策略（rawInputPolicyProvider/photoBurnPolicyProvider）
+/// 与 settings 表落库读回（bootstrap 装配生效）不动——仅 UI 不露出，行为
+/// 回归合规缺省档位。
 ///
 /// **「升级计划」移除决策（§4.1 产品拍板项，无规范出处可引）**：
 /// `_SectionHeader('升级 Slimca Pro')` + `_PaywallSection` 整块从主列表移除，
@@ -26,10 +33,6 @@
 /// 页面转场（§4.4）：主题入口保留弹簧面板（showThemeEditorPanel，
 /// spring.snappy 速度继承=HIG 可取消+跟手）；/settings/* 子路由随数据主权页
 /// 接入时走共享轴 PageRouteBuilder（§4.3 路由表、§9.5）。
-///
-/// W7-8 接入（§11.1）保留：raw_input 上云开关（§3.7/§3.3 默认关）与拍照原图
-/// 即焚开关（§11.2 W11-12 任务 3，默认开）均为 Switch 行写回运行期持有 +
-/// settings 表落库（§5.6⑲ 本地件、永不同步）。
 library;
 
 import 'dart:async';
@@ -40,23 +43,22 @@ import 'package:package_info_plus/package_info_plus.dart';
 // §8.2 三层架构：危险红字/卡底读 SlimcaTheme 语义 token（窄 show 子句，
 // §10.4 只引所需符号，避免与 ui_kit 后续导出冲突）。
 import 'package:ui_kit/ui_kit.dart'
-    show SlimcaTheme, SlimcaThemeBuildContext;
+    show
+        SlimcaSizesBuildContext,
+        SlimcaSpacingBuildContext,
+        SlimcaTheme,
+        SlimcaThemeBuildContext;
 
 import '../../app/providers.dart';
-import '../../settings/photo_burn_setting.dart';
-import '../../settings/raw_input_setting.dart';
 import '../../telemetry/w16_funnel_events.dart';
+import 'ai_api_editor_sheet.dart' show showAiApiEditorSheet;
 import 'menu_components.dart';
 import 'theme_editor_panel.dart' show showThemeEditorPanel;
 
+const Key settingsAiApiEntryKey = Key('settings_ai_api_entry');
+
 /// 测试锚点：主题编辑器入口（§11.2 W16 任务 1）。
 const Key settingsThemeEntryKey = Key('settings_theme_entry');
-
-/// 测试锚点：raw_input 上云开关（Switch 行内 trailing Switch）。
-const Key settingsRawInputSwitchKey = Key('settings_raw_input_switch');
-
-/// 测试锚点：拍照原图即焚开关（§11.2 W11-12 任务 3）。
-const Key settingsPhotoBurnSwitchKey = Key('settings_photo_burn_switch');
 
 /// 测试锚点：清空数据危险项（§4.3 危险项确认弹窗链路）。
 const Key settingsClearDataKey = Key('settings_clear_data');
@@ -70,12 +72,6 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
-  /// 开关的页面态（toggle 立即反映；写盘异步跟随）。
-  bool _rawInputCloud = false;
-
-  /// 拍照原图即焚开关页面态（§11.2 W11-12 任务 3；默认开 §3.7）。
-  bool _photoBurnAfterParse = true;
-
   /// 应用版本信息 Future（「关于」分组版本行；package_info_plus 运行时读取，
   /// 插件通道不可用的环境（如 widget 测试）→ 快照 error，渲染占位「—」，
   /// 不阻塞设置页装配）。
@@ -84,47 +80,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   void initState() {
     super.initState();
-    _rawInputCloud = ref.read(rawInputPolicyProvider).enabled;
-    _photoBurnAfterParse = ref.read(photoBurnPolicyProvider).enabled;
     _versionFuture = PackageInfo.fromPlatform();
-  }
-
-  /// 切换 raw_input 上云开关（§3.7）：先改运行期持有（AI 请求构造时读取），
-  /// 再异步落库 settings 表（§5.6⑲；失败仅 SnackBar，不回滚页面态——
-  /// 下次启动按落库值装配，本地件自愈口径）。
-  Future<void> _toggleRawInputCloud(bool enabled) async {
-    setState(() => _rawInputCloud = enabled);
-    ref.read(rawInputPolicyProvider).enabled = enabled;
-    try {
-      await saveRawInputCloudEnabled(
-        ref.read(appDatabaseProvider),
-        enabled: enabled,
-      );
-    } on Object catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('开关保存失败（本地保留本次选择）：$error')),
-      );
-    }
-  }
-
-  /// 切换拍照原图即焚开关（§3.7/§11.2 任务 3）：先改运行期持有（附件存储在
-  /// 「登记即焚」时刻同步读取——toggle 即刻生效），再异步落库 settings 表
-  /// （§5.6⑲；失败仅 SnackBar，不回滚页面态，本地件自愈口径同上）。
-  Future<void> _togglePhotoBurnAfterParse(bool enabled) async {
-    setState(() => _photoBurnAfterParse = enabled);
-    ref.read(photoBurnPolicyProvider).enabled = enabled;
-    try {
-      await savePhotoBurnAfterParse(
-        ref.read(appDatabaseProvider),
-        enabled: enabled,
-      );
-    } on Object catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('开关保存失败（本地保留本次选择）：$error')),
-      );
-    }
   }
 
   /// 清空数据危险项确认弹窗（§4.3 定稿：Cancel 不做默认按钮 + 按钮用具体
@@ -174,6 +130,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final syncLabel = ref.watch(syncBackendLabelProvider);
+    final spacing = context.spacing;
+    final sizes = context.sizes;
     // W16 主题入口副标题（当前包名 + 深浅模式；§8.3/§11.2 W16 任务 1）。
     final themePackLabel = ref.watch(currentThemePackNameProvider);
     final ThemeMode themeMode = ref.watch(slimcaThemeModeProvider);
@@ -186,46 +144,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       appBar: AppBar(title: const Text('我的')),
       body: ListView(
         // 页边 24dp（§4.2「页边 24」= space300，§1.3 SlimcaSpacing 刻度；
-        // 底部 96 预留壳层中央「+」FAB 命中区）。
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 96),
+        // 底部留白（底栏重设计拍板（《UI-规范与重设计》§2.2 增补段））：清中央花瓣按钮凸出栏体
+        // （cradle 间隙约 34）+ 呼吸——space600+rowSingleLine+space300
+        // 组合表达（§2.2 禁裸尺寸）。
+        padding: EdgeInsets.fromLTRB(
+          spacing.space300,
+          spacing.space100,
+          spacing.space300,
+          spacing.space600 + sizes.rowSingleLine + spacing.space300,
+        ),
         children: <Widget>[
           // ── 顶部账号/同步卡（§4.1「非 ListTile：同步状态只读一行 + 头像位」）。
           _AccountSyncCard(syncLabel: syncLabel),
           const SizedBox(height: 24), // 组间 24（space300，§1.3）
-          // ── 分组「数据与隐私」（§4.1）：两 Switch 行原样迁入（语义不变）。
+          // ── 分组「AI 服务」（用户拍板：AI apikey 用户自设、默认空=离线
+          //    解析桩；凭据存 settings 表本地件、永不同步 §5.6⑲/§3.7）。
           SlimcaMenuGroup(
-            header: '数据与隐私',
+            header: 'AI 服务',
             children: <Widget>[
               SlimcaMenuTile(
-                icon: Icons.privacy_tip_outlined,
-                title: '原文上云（raw_input）',
-                subtitle: const Text(
-                  '关闭（默认）时 AI 请求仅携带规范化最小集，原文不出设备；'
-                  '开启时原文随请求上传便于排查（§3.3/§3.7）',
+                key: settingsAiApiEntryKey,
+                icon: Icons.key_outlined,
+                title: 'AI 服务配置',
+                subtitle: Text(
+                  ref.watch(aiApiConfigProvider).$1.hasKey
+                      ? '已配置自定义 API Key（OpenAI 兼容端点）'
+                      : '未配置（默认离线解析桩；点击设置 API Key/Base/模型）',
                 ),
-                trailing: Switch(
-                  key: settingsRawInputSwitchKey,
-                  value: _rawInputCloud,
-                  onChanged: _toggleRawInputCloud,
-                ),
-                onTap: () => unawaited(_toggleRawInputCloud(!_rawInputCloud)),
-              ),
-              SlimcaMenuTile(
-                icon: Icons.local_fire_department_outlined,
-                title: '拍照原图解析后即焚',
-                subtitle: const Text(
-                  '开启（默认）：确认落库后立即删除原图，仅留结构化结果与审计'
-                  '元数据，不落存储（§3.3/§5.6㉑）；关闭：本机留档一份原图便于'
-                  '复查（仅设备本地，永不上传）',
-                ),
-                trailing: Switch(
-                  key: settingsPhotoBurnSwitchKey,
-                  value: _photoBurnAfterParse,
-                  onChanged: _togglePhotoBurnAfterParse,
-                ),
-                onTap: () => unawaited(
-                  _togglePhotoBurnAfterParse(!_photoBurnAfterParse),
-                ),
+                onTap: () => unawaited(showAiApiEditorSheet(context)),
               ),
             ],
           ),

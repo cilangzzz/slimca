@@ -45,6 +45,8 @@ import 'package:feature_capture/feature_capture.dart'
         CaptureParsedLine,
         CaptureParseResult,
         kFakePhotoBytes;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -186,7 +188,8 @@ Future<void> _openPhotoChannel(WidgetTester tester) async {
   // 拍通道面板渲染（§11.2 任务 2）：标题 + 拍照/相册双入口 + 隐私提示。
   expect(find.text('拍一笔'), findsOneWidget);
   expect(find.byKey(const Key('capture_photo_camera')), findsOneWidget);
-  expect(find.byKey(const Key('capture_photo_gallery')), findsOneWidget);
+  expect(find.byKey(const Key('capture_photo_gallery')), findsNothing,
+      reason: '拍照单一入口：拍通道无相册按钮（§10.4）');
   expect(find.byKey(const Key('capture_photo_privacy_hint')), findsOneWidget);
 }
 
@@ -234,12 +237,16 @@ void main() {
               .overrideWithValue(FakeImageCompressor()),
           captureAttachmentStoreProvider.overrideWithValue(attachmentStore),
           capturePhotoTelemetryProvider.overrideWithValue(telemetry),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),
     );
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('Slimca'), findsOneWidget);
+    expect(find.text('Slimca'), findsNothing,
+        reason: '完整壳已起（首页 AppBar 无产品名标题，用户拍板移除）');
 
     // ── 拍段可达 + §3.7 默认口径隐私提示（原图不出端）──────────────────
     await _openPhotoChannel(tester);
@@ -351,7 +358,7 @@ void main() {
   });
 
   testWidgets(
-      'W11-12 拍照 e2e（raw_input 开）：相册 → 云端识别 → 确认卡复用 → 确认落库'
+      'W11-12 拍照 e2e（raw_input 开）：拍照入口 → 云端识别 → 确认卡复用 → 确认落库'
       '（kind=mixed + ai_parses 留痕 + 即焚 + 漏斗 success）（§3.7/§5.6⑭/§11.2）',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(900, 1800);
@@ -422,6 +429,9 @@ void main() {
           capturePhotoTelemetryProvider.overrideWithValue(telemetry),
           // §3.7 raw_input 开（用户显式选择）：允许本次识别携带压缩字节上云。
           captureRawInputCloudEnabledProvider.overrideWithValue(() => true),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),
@@ -436,10 +446,14 @@ void main() {
       reason: 'raw_input 开（§3.7 显式开启）隐私提示口径',
     );
 
-    // ── 相册入口（FakeImageSource gallery 分流）→ 云端识别 → 确认卡 ──
-    await tester.tap(find.byKey(const Key('capture_photo_gallery')));
+    // ── 拍照入口（FakeImageSource camera 分流）→ 云端识别 → 确认卡 ──
+    // （相册路径语义由包内 capture_photo_test 覆盖：CapturePage 独立抽屉
+    //   保留双入口；拍通道为拍照单一入口，§10.4）
+    await tester.tap(find.byKey(const Key('capture_photo_camera')));
     await _pumpUntilFound(tester, find.byKey(const Key('capture_confirm_submit')));
-    expect(imageSource.galleryCalls, 1, reason: '相册入口分流（from_camera=false）');
+    expect(imageSource.captureCalls, 1, reason: '拍照入口分流（from_camera=true）');
+    expect(imageSource.galleryCalls, 0,
+        reason: '单一入口：拍通道无相册按钮（§10.4）');
     expect(photoParser.calls, 1, reason: '云端识别恰一次（闸门放行后）');
     expect(photoParser.requests.single.inputHash,
         sha256.convert(kFakePhotoBytes).toString(),
@@ -499,8 +513,8 @@ void main() {
       'photo_parse_result',
       'photo_confirm',
     ]);
-    expect(telemetry.propsOf('photo_capture_open')?['from_camera'], isFalse,
-        reason: '相册入口 from_camera=false');
+    expect(telemetry.propsOf('photo_capture_open')?['from_camera'], isTrue,
+        reason: '拍照单一入口（from_camera=true，§10.4）');
     expect(telemetry.propsOf('photo_parse_result')?['outcome'], 'success');
     expect(telemetry.propsOf('photo_confirm')?['within_guard'], isTrue);
     expect(

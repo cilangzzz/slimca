@@ -136,6 +136,8 @@
 
 **进组件默认值**（不造 token，框架默认即合规）：ListTile 行高 56/72、Switch 轨道/手柄、NavigationBar 80/32、RefreshIndicator 40/2.5、IconButton 48 命中、InkWell 状态层（Flutter 默认 overlay 透明度与 8/10/16% 口径一致，自绘组件才需显式引用 token）。
 
+**底栏重设计增补**（§5 #14 定型）：凹槽容器 = BottomAppBar + CircularNotchedRectangle（notchMargin 显式 6——框架默认 4，固化拍板口径 → 凹槽半径 34；elevation level0 显式回落；clipBehavior antiAlias 使 NavigationBar 子树随凹槽裁剪，防指示器 pill 悬画进缺口），框架件零自绘 Path 即合规；中央花瓣按钮 = SlimcaCookieShapeBorder（M3 Expressive cookie 形状库，瓣数 12/谷径比 0.86 无规范数值出处 → 拍板推导，固化为 ui_kit 几何常量、非动效 token；有效域 k>cos(π/n)/(1+sin(π/n))，debug assert 兜底），外接半径取 FAB regular 56 之半（大厂规范 §7.2 尺寸档），凹槽半径 34 与花瓣尖 28 之间 6dp 间隙环透出页面底；一体化后中央按钮由「FAB 独立元素（可豁免）」转入容器类 3:1 校验（护栏对「主色钮面/底栏卡面」「底栏描边/底栏卡面」入 kSlimcaAaPairSpecs，6 包自然达标）。
+
 ### 2.3 MotionLevel 降级映射（Apple Reduce Motion 五条 → Slimca 实现）
 
 | HIG 原则 | Slimca 落法 |
@@ -277,7 +279,7 @@
 | 11 | `_SavingsCard` 进度条（today_dashboard_page.dart:855-868） | 进度 | TweenAnimationBuilder durM+easeOutCubic | effects 类禁过冲 ✓ | 保留 | —（合规） |
 | 12 | `SlimcaStaggerItem`（stagger.dart） | 级联 | 80ms 间隔 | short 档内 ✓ | 保留 | —（合规） |
 | 13 | `confirm_card` / `theme_editor_panel` | 弹层 | 框架默认过渡 | 弹层 fade/scale short-medium 档；弹层进出场不对称（出快于进） | 补 curveExpand/curveCollapse 进出场对 | token（新曲线对首批使用方） |
-| 14 | 底部 NavigationBar（router.dart） | Tab | Flutter M3 默认（容器 80/indicator 32） | 官方值一致 ✓ | 保留 | 默认值 |
+| 14 | 底部导航壳（router.dart SlimcaShell） | Tab+中央录入 | BottomAppBar 凹槽（CircularNotchedRectangle + notchMargin 显式 6（框架默认 4，固化拍板口径）+ clipBehavior antiAlias）承接花瓣 FAB（M3E cookie 12 瓣/谷径 0.86 拍板），NavigationBar 80/32 嵌入（背景透明、elevation 显式 level0）；中央 primary/onPrimary 唯一显著填充 | 容器 80/indicator 32 官方值一致 ✓；花瓣形状=M3E shape library（拍板推导，无规范数值出处）；凹槽=框架件零自绘 Path | 定型保留（凹槽花瓣底栏）；≤340dp 宽度 pill 顶角 2-4dp 裁切缺口属真机眼检项；P2 预留按压 morph 圆→radiusCard 16（须 off 分支 fadeOff 100ms+Curves.linear，且须自行实现 lerpFrom/lerpTo） | 默认值（NavigationBar）+ 拍板（notchMargin 6/cookie 几何常量 kSlimcaCookiePetals/kSlimcaCookieValleyRatio） |
 | 15 | `RefreshIndicator`（ledger_page 等） | 刷新 | 默认 displacement 40/strokeWidth 2.5 | 官方值一致 ✓ | 保留 | 默认值 |
 | 16 | `capture_recent_chips` | chip | chip/勾选 durS 120ms | short 档 ✓；chip 命中 ≥48×48 | 检查 chip 视觉高度与命中区（chip 视觉 32 级 + 外扩命中） | 默认值（命中外扩组件化） |
 | 17 | 月历下钻 `/calendar`（§4.3 P0） | 容器变换 | 450ms spring.soft（§9.3#6 未实现） | M3 Card→全屏 500ms+emphasized；现 450=long1 同值 | 按 §3 组合实现时保持 dur.xl 450 + curveEmphasized（easeInOutCubicEmphasized 即 M3 emphasized 官方实现） | token（合规） |

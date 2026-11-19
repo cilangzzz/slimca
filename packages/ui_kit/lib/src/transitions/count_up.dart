@@ -6,6 +6,9 @@ import '../tokens/motion_config.dart';
 ///
 /// 金额一律整数分、热量一律整数 kcal（§5.1），统一 int 驱动；
 /// 份量滑杆/金额点改联动重算时，TweenAnimationBuilder 从当前值续播到新目标（§2.3 步骤 4）。
+///
+/// 数字排版强制 tabular figures（§5.4 双账数字等宽对齐纪律，拍板 + M2/HIG）——
+/// count-up 跳动时位数宽度不抖动。
 class SlimcaCountUp extends StatelessWidget {
   const SlimcaCountUp({
     super.key,
@@ -36,7 +39,11 @@ class SlimcaCountUp extends StatelessWidget {
       curve: off
           ? Curves.linear
           : motion.curveEaseOutExpo, // §9.3#4 easeOutExpo
-      builder: (context, v, _) => Text(format?.call(v) ?? '$v', style: style),
+      builder: (context, v, _) => Text(
+        format?.call(v) ?? '$v',
+        style: (style ?? const TextStyle())
+            .copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
+      ),
     );
   }
 }

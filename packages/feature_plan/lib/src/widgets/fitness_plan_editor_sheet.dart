@@ -19,6 +19,7 @@ import 'package:ui_kit/ui_kit.dart';
 
 import '../fitness_plan_models.dart';
 import '../plan_gateway.dart';
+import 'plan_sheet_sizing.dart';
 import 'plan_text_field.dart';
 
 /// 名称输入测试锚点。
@@ -127,7 +128,7 @@ class _FitnessPlanEditorSheetState
   Future<void> _submit() async {
     final name = _name.trim();
     if (name.isEmpty) {
-      setState(() => _errorText = '请填写计划名（§5.5⑧ name）');
+      setState(() => _errorText = '请填写计划名');
       return;
     }
     final exercises = <PlanExercise>[];
@@ -158,7 +159,7 @@ class _FitnessPlanEditorSheetState
       ));
     }
     if (exercises.isEmpty) {
-      setState(() => _errorText = '至少需要一个动作（§5.5⑧ exercises）');
+      setState(() => _errorText = '至少需要一个动作');
       return;
     }
     final gateway = ref.read(planGatewayProvider);
@@ -193,75 +194,92 @@ class _FitnessPlanEditorSheetState
   Widget build(BuildContext context) {
     final tokens = context.slimca;
     final editing = widget.plan != null;
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+    // 稳定高度外框（planSheetHeight，与 capture 录入抽屉同口径）：动态动作行
+    // 在内容区滚动，主 CTA「创建/保存」钉底（外框高度恒定）。
+    return SizedBox(
+      height: planSheetHeight(context),
+      child: Padding(
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              editing ? '编辑健身计划' : '新建健身计划',
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: tokens.onSurface),
-            ),
-            const SizedBox(height: 12),
-            PlanTextField(
-              key: fitnessPlanNameFieldKey,
-              initial: _name,
-              hint: '计划名（如 推拉腿）',
-              onChanged: (v) => setState(() => _name = v),
-            ),
-            const SizedBox(height: 12),
-            Text('按周排期（勾选哪天练，§5.5⑧ weekday_mask）',
-                style:
-                    TextStyle(fontSize: 13, color: tokens.onSurfaceMuted)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (var i = 0; i < kPlanWeekdayLabels.length; i++)
-                  FilterChip(
-                    key: fitnessPlanWeekdayChipKey(i),
-                    label: Text(kPlanWeekdayLabels[i]),
-                    selected: _selectedBits.contains(i),
-                    onSelected: (_) => _toggleBit(i),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text('动作列表（动作名/组数/目标次数/目标重量/组间休息秒，§5.5⑧）',
-                style:
-                    TextStyle(fontSize: 13, color: tokens.onSurfaceMuted)),
-            const SizedBox(height: 8),
-            for (final row in _rows)
-              _ExerciseRowCard(
-                key: ValueKey<String>(row.rowKey),
-                row: row,
-                onRemove: () => _removeRow(row),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      editing ? '编辑健身计划' : '新建健身计划',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: tokens.onSurface),
+                    ),
+                    const SizedBox(height: 12),
+                    PlanTextField(
+                      key: fitnessPlanNameFieldKey,
+                      initial: _name,
+                      hint: '计划名（如 推拉腿）',
+                      onChanged: (v) => setState(() => _name = v),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('按周排期（勾选哪天练）',
+                        style:
+                            TextStyle(fontSize: 13, color: tokens.onSurfaceMuted)),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (var i = 0; i < kPlanWeekdayLabels.length; i++)
+                          FilterChip(
+                            key: fitnessPlanWeekdayChipKey(i),
+                            label: Text(kPlanWeekdayLabels[i]),
+                            selected: _selectedBits.contains(i),
+                            onSelected: (_) => _toggleBit(i),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text('动作列表（动作名/组数/目标次数/目标重量/组间休息秒）',
+                        style:
+                            TextStyle(fontSize: 13, color: tokens.onSurfaceMuted)),
+                    const SizedBox(height: 8),
+                    for (final row in _rows)
+                      _ExerciseRowCard(
+                        key: ValueKey<String>(row.rowKey),
+                        row: row,
+                        onRemove: () => _removeRow(row),
+                      ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      key: fitnessPlanAddExerciseKey,
+                      onPressed: _addRow,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('添加动作'),
+                    ),
+                    if (_errorText != null) ...[
+                      const SizedBox(height: 8),
+                      Text(_errorText!,
+                          style: TextStyle(fontSize: 13, color: tokens.danger)),
+                    ],
+                  ],
+                ),
               ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              key: fitnessPlanAddExerciseKey,
-              onPressed: _addRow,
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('添加动作'),
             ),
-            if (_errorText != null) ...[
-              const SizedBox(height: 8),
-              Text(_errorText!,
-                  style: TextStyle(fontSize: 13, color: tokens.danger)),
-            ],
-            const SizedBox(height: 16),
-            FilledButton(
-              key: fitnessPlanSubmitKey,
-              onPressed: _submit,
-              child: Text(editing ? '保存修改' : '创建计划'),
+            // 主 CTA 钉底（唯一填充按钮，通栏宽度）。
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  key: fitnessPlanSubmitKey,
+                  onPressed: _submit,
+                  child: Text(editing ? '保存修改' : '创建计划'),
+                ),
+              ),
             ),
           ],
         ),

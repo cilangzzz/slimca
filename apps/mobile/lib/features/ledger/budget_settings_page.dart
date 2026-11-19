@@ -37,12 +37,22 @@ class BudgetSettingsPage extends ConsumerWidget {
     final kcalGoal = _firstOrNull(
       budgets.where((b) => b.isKcalGoal && !b.isCategoryGoal),
     );
+    final spacing = context.spacing;
+    final sizes = context.sizes;
 
     return Scaffold(
       appBar: AppBar(title: const Text('预算设置')),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+          // 底部留白（底栏重设计拍板（《UI-规范与重设计》§2.2 增补段））：清中央花瓣按钮凸出栏体
+          // （cradle 间隙约 34）+ 呼吸——space600+rowSingleLine+space200
+          // 组合表达（§2.2 禁裸尺寸）。
+          padding: EdgeInsets.fromLTRB(
+            spacing.space200,
+            spacing.space150,
+            spacing.space200,
+            spacing.space600 + sizes.rowSingleLine + spacing.space200,
+          ),
           children: [
             _DailyAmountSection(
               title: '每日总支出目标',

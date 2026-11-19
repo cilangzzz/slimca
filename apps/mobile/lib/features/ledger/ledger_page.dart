@@ -55,6 +55,8 @@ class LedgerPage extends ConsumerWidget {
     )));
     final groups = asyncGroups.value ?? const <LedgerDayGroup>[];
     final isKcalScope = scope?.kind == 'kcal';
+    final spacing = context.spacing;
+    final sizes = context.sizes;
 
     return Scaffold(
       appBar: AppBar(
@@ -110,7 +112,15 @@ class LedgerPage extends ConsumerWidget {
               child: groups.isEmpty
                   ? _LedgerEmptyHint(hasData: asyncGroups.hasValue)
                   : ListView(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+                      // 底部留白（底栏重设计拍板（《UI-规范与重设计》§2.2 增补段））：清中央花瓣按钮
+                      // 凸出栏体（cradle 间隙约 34）+ 呼吸——space600+
+                      // rowSingleLine+space200 组合表达（§2.2 禁裸尺寸）。
+                      padding: EdgeInsets.fromLTRB(
+                        spacing.space200,
+                        spacing.space100,
+                        spacing.space200,
+                        spacing.space600 + sizes.rowSingleLine + spacing.space200,
+                      ),
                       children: [
                         for (final group in groups) ...[
                           _LedgerDayHeader(group: group),

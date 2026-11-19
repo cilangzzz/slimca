@@ -1,12 +1,9 @@
-/// 待办页（§3.6 待办基础 P0 + 待办完整版 P1（W13）、§5.5⑩ todos、
-/// §11.1 W5-6 主线任务 2、§11.2 W13 主线「待办完整版（RRULE+提醒）」）。
+/// 收集箱页（§3.6 待办 P0 + 待办完整版 P1（W13）、§5.5⑩ todos）。
 ///
-/// 双视图（§3.6）：今日待办（date=今天）与收集箱（date IS NULL）。
-/// W13 起今日视图读**当日实例流**（[todoDayInstancesProvider]）：非重复行
-/// date=当日直出；重复待办按 anchor 展开命中当日的虚拟实例——查询时展开、
-/// 不预生成行（取舍见 rrule.dart 文档注释）；勾选经
-/// [PlanGateway.setTodoDone] 作用于基行（done_at 只前进合并 §6.5），同事务
-/// 重算 day_summary.todo_done/todo_total（§5.6，锚点日即基行 date）。
+/// 定位（计划域 IA 重设计）：今日待办由壳层计划 Tab「今日待办」卡承载
+/// （就地勾选/快速添加），本页只管**收集箱**（date IS NULL 的未排期池）：
+/// 随手记的想法先进这里，再「加入今日」安排；重复/提醒在编辑抽屉设置
+/// （收集箱待办无计划日——重复自保存日起展开，锚点口径见 rrule.dart）。
 ///
 /// 编辑入口：点瓦片或「详细」按钮 → [TodoEditorSheet]（标题/备注/重复规则
 /// （每天/每周 X/每月 X 日/自定义间隔 N 天）/提醒时刻）；提醒只落 remind_at
@@ -42,10 +39,7 @@ Key todoDeleteKey(String todoId) => ValueKey('todo_delete_$todoId');
 /// 收集箱→今日按钮测试锚点（`todo_move_today_$todoId`）。
 Key todoMoveTodayKey(String todoId) => ValueKey('todo_move_today_$todoId');
 
-/// 视图档位（§3.6 双视图）。
-enum _TodoView { today, inbox }
-
-/// 待办页。
+/// 收集箱页。
 class TodoPage extends ConsumerStatefulWidget {
   const TodoPage({super.key});
 
@@ -55,10 +49,6 @@ class TodoPage extends ConsumerStatefulWidget {
 
 class _TodoPageState extends ConsumerState<TodoPage> {
   late final TextEditingController _input = TextEditingController();
-  _TodoView _view = _TodoView.today;
-
-  /// 今日（页面生命周期内固定，避免跨日抖动；§5.1 本地日历日）。
-  late final String _today = dom.formatCalendarDay(DateTime.now());
 
   @override
   void dispose() {
@@ -70,23 +60,16 @@ class _TodoPageState extends ConsumerState<TodoPage> {
     final title = _input.text.trim();
     if (title.isEmpty) return;
     _input.clear();
-    final gateway = ref.read(planGatewayProvider);
-    // 收集箱视图新增 date=null（§5.5⑩）；今日视图带当日计划日。
-    gateway
-        .createTodo(title: title, date: _view == _TodoView.today ? _today : null);
+    // 收集箱新增 date=null（§5.5⑩ date IS NULL=收集箱池）。
+    ref.read(planGatewayProvider).createTodo(title: title, date: null);
   }
 
   /// 打开 W13 编辑抽屉（§3.6）：[todo] 非空=编辑基行；空=新建
-  /// （今日视图挂当日计划日、收集箱挂 null，§5.5⑩）。
+  /// （收集箱计划日=null，重复自保存日起展开，§5.5⑩）。
   void _openEditor({cdb.Todo? todo}) {
     showSlimcaSpringSheet<void>(
       context: context,
-      builder: (_) => TodoEditorSheet(
-        todo: todo,
-        planDate: todo != null
-            ? null
-            : (_view == _TodoView.today ? _today : null),
-      ),
+      builder: (_) => TodoEditorSheet(todo: todo, planDate: null),
     );
   }
 
@@ -94,35 +77,23 @@ class _TodoPageState extends ConsumerState<TodoPage> {
   Widget build(BuildContext context) {
     final tokens = context.slimca;
     // Riverpod 3 读态约定（与 capture_page 同口径）：.value + null 骨架帧。
-    // W13：今日视图读当日实例流（重复待办查询时展开，§3.6/§11.2 W13）。
-    final instances = _view == _TodoView.today
-        ? ref.watch(todoDayInstancesProvider(_today)).value
-        : ref.watch(todoDayInstancesProvider(null)).value;
+    // 收集箱流：date IS NULL 基行直出、不展开（无展开起点，§5.5⑩）。
+    final instances = ref.watch(todoDayInstancesProvider(null)).value;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('待办')),
+      appBar: AppBar(title: const Text('收集箱')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SegmentedButton<_TodoView>(
-              segments: const [
-                ButtonSegment(value: _TodoView.today, label: Text('今日待办')),
-                ButtonSegment(value: _TodoView.inbox, label: Text('收集箱')),
-              ],
-              selected: {_view},
-              onSelectionChanged: (selection) =>
-                  setState(() => _view = selection.first),
-            ),
-            const SizedBox(height: 12),
             if (instances != null)
               Text(
-                '已完成 ${instances.where((t) => t.done).length}/${instances.length}'
-                '（§3.6 W13 当日实例口径）',
+                '已完成 ${instances.where((t) => t.done).length}/${instances.length}',
                 style:
                     TextStyle(fontSize: 13, color: tokens.onSurfaceMuted),
               ),
+            const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
@@ -131,7 +102,7 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                     controller: _input,
                     style: TextStyle(fontSize: 15, color: tokens.onSurface),
                     decoration: InputDecoration(
-                      hintText: '添加待办…',
+                      hintText: '随手记，先放收集箱…',
                       hintStyle:
                           TextStyle(fontSize: 14, color: tokens.onSurfaceMuted),
                       filled: true,
@@ -157,7 +128,7 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                 const SizedBox(width: 8),
                 IconButton(
                   key: todoAdvancedKey,
-                  tooltip: '详细（重复/提醒，§3.6 W13）',
+                  tooltip: '详细（重复/提醒）',
                   onPressed: () => _openEditor(),
                   icon: const Icon(Icons.tune),
                 ),
@@ -176,9 +147,7 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                   : instances.isEmpty
                       ? Center(
                           child: Text(
-                            _view == _TodoView.today
-                                ? '今日暂无待办（§3.6）'
-                                : '收集箱为空：随手记的想法先放这里（§5.5⑩）',
+                            '收集箱为空：随手记的想法先放这里，再安排到具体的日子',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                                 fontSize: 14, color: tokens.onSurfaceMuted),
@@ -190,7 +159,6 @@ class _TodoPageState extends ConsumerState<TodoPage> {
                               const SizedBox(height: 8),
                           itemBuilder: (context, index) => _TodoTile(
                             instance: instances[index],
-                            view: _view,
                             onEdit: () => _openEditor(
                                 todo: instances[index].todo),
                           ),
@@ -203,18 +171,16 @@ class _TodoPageState extends ConsumerState<TodoPage> {
   }
 }
 
-/// 单条待办实例瓦片（§3.6 W13）：勾选联动投影（§5.6 todo_done）、删除=
-/// 基行墓碑（§5.1）、收集箱项可「加入今日」（§3.6）、重复实例展示规则
-/// 摘要 + 提醒角标；点标题进编辑抽屉（重复/提醒，§3.6 完整版）。
+/// 收集箱瓦片（§3.6 W13）：勾选=行级完成（done_at 只前进 §6.5）、删除=基行
+/// 墓碑（§5.1）、「加入今日」回填计划日（§3.6）；重复收集箱行展示规则摘要 +
+/// 提醒角标；点标题进编辑抽屉（重复/提醒，§3.6 完整版）。
 class _TodoTile extends ConsumerWidget {
   const _TodoTile({
     required this.instance,
-    required this.view,
     required this.onEdit,
   });
 
   final TodoDayInstance instance;
-  final _TodoView view;
   final VoidCallback onEdit;
 
   @override
@@ -260,7 +226,7 @@ class _TodoTile extends ConsumerWidget {
                           children: [
                             if (instance.recurring)
                               Text(
-                                '${instance.repeatLabel ?? '重复'}（§5.5⑩）',
+                                instance.repeatLabel ?? '重复',
                                 style: TextStyle(
                                     fontSize: 11,
                                     color: tokens.onSurfaceMuted),
@@ -277,7 +243,7 @@ class _TodoTile extends ConsumerWidget {
                 ),
               ),
             ),
-            if (view == _TodoView.inbox && !done && !instance.recurring)
+            if (!done && !instance.recurring)
               TextButton(
                 key: todoMoveTodayKey(todo.id),
                 onPressed: () => gateway.moveTodoToToday(todo.id,

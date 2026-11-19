@@ -1,8 +1,7 @@
 /// 健身计划页（§3.5 健身计划 P1 留存钩子、§5.5⑧⑨、§11.2 W14 主线任务 1/2）。
 ///
-/// 组成：模板列表（周排期条高亮 + 今日排期态 + 动作摘要）→ 一键开练
-/// （startWorkoutSession → [FitnessWorkoutPage]）/ 编辑/删除；新建/编辑走
-/// 弹簧抽屉 [FitnessPlanEditorSheet]；AppBar 历史入口进 [FitnessHistoryPage]。
+/// 组成：模板列表（周排期条高亮 + 今日排期态 + 动作摘要）→ 编辑/删除；
+/// 新建/编辑走弹簧抽屉 [FitnessPlanEditorSheet]。
 ///
 /// 排期口径取舍（§3.5「计划日自动生成会话」）：W14 收敛为「排期日一键开练」
 /// ——不预生成空会话行（未训练日不留垃圾行），与 W13 重复待办「查询时展开、
@@ -14,7 +13,6 @@
 library;
 
 import 'package:core_db/core_db.dart' as cdb;
-import 'package:core_domain/core_domain.dart' as dom;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ui_kit/ui_kit.dart';
@@ -23,21 +21,12 @@ import '../fitness_plan_models.dart';
 import '../plan_gateway.dart';
 import '../plan_providers.dart';
 import '../widgets/fitness_plan_editor_sheet.dart';
-import 'fitness_history_page.dart';
-import 'fitness_workout_page.dart';
 
 /// 新建计划按钮测试锚点（AppBar）。
 const Key fitnessPlanCreateKey = ValueKey('fitness_plan_create');
 
 /// 空态新建按钮测试锚点。
 const Key fitnessPlanEmptyCreateKey = ValueKey('fitness_plan_empty_create');
-
-/// 训练历史入口测试锚点（AppBar）。
-const Key fitnessHistoryKey = ValueKey('fitness_history');
-
-/// 开练按钮测试锚点（`fitness_plan_start_$planId`）。
-Key fitnessPlanStartKey(String planId) =>
-    ValueKey('fitness_plan_start_$planId');
 
 /// 编辑按钮测试锚点（`fitness_plan_edit_$planId`）。
 Key fitnessPlanEditKey(String planId) => ValueKey('fitness_plan_edit_$planId');
@@ -51,7 +40,9 @@ Key fitnessPlanDeleteKey(String planId) =>
 Key fitnessPlanDayChipKey(String planId, int bitIndex) =>
     ValueKey('fitness_plan_day_${planId}_$bitIndex');
 
-/// 健身计划页。
+/// 健身计划页（纯管理页：模板建档/编辑/删除 + 周排期日历；开练入口唯一
+/// 在壳层计划 Tab「今日健身」卡排期行——管理页不管练，单一入口纪律；
+/// 训练历史入口挂在健身记录页 AppBar，见 fitness_log_page.dart）。
 class FitnessPlanPage extends ConsumerWidget {
   const FitnessPlanPage({super.key});
 
@@ -63,15 +54,6 @@ class FitnessPlanPage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('健身计划'),
         actions: [
-          IconButton(
-            key: fitnessHistoryKey,
-            tooltip: '训练历史',
-            icon: const Icon(Icons.history),
-            onPressed: () => Navigator.of(context).push(
-              SlimcaSharedAxisPageRoute<void>(
-                  builder: (_) => const FitnessHistoryPage()),
-            ),
-          ),
           IconButton(
             key: fitnessPlanCreateKey,
             tooltip: '新建计划',
@@ -134,9 +116,8 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '训练模板（动作/组数/目标次数/目标重量/组间休息秒）+ 按周排期'
-              '（§5.5⑧）；排期日一键开练，每完成一组落 exercise_sets，训练结束'
-              '汇总 fitness_sessions 并联动消耗行（§5.5⑦⑨）',
+              '训练模板（动作/组数/目标次数/目标重量/组间休息秒）+ 按周排期；'
+              '排期日会出现在计划页「今日健身」卡，一键开练',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: tokens.onSurfaceMuted),
             ),
@@ -154,7 +135,7 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-/// 计划卡：名称/起始日/动作摘要 + 周排期条（高亮排期日与今日）+ 开练/编辑/删除。
+/// 计划卡：名称/起始日/动作摘要 + 周排期条（高亮排期日与今日）+ 编辑/删除。
 class _PlanCard extends ConsumerWidget {
   const _PlanCard({required this.plan});
 
@@ -209,7 +190,7 @@ class _PlanCard extends ConsumerWidget {
                 _ScheduleStrip(plan: plan),
                 const SizedBox(height: 8),
                 Text(
-                  scheduledToday ? '今日已排 · 可开练' : '今日无排期',
+                  scheduledToday ? '今日已排' : '今日无排期',
                   style: TextStyle(
                     fontSize: 13,
                     color: scheduledToday
@@ -242,14 +223,6 @@ class _PlanCard extends ConsumerWidget {
                 const SizedBox(height: 12),
                 Row(
                   children: [
-                    FilledButton.icon(
-                      key: fitnessPlanStartKey(plan.id),
-                      onPressed: template.isStartable
-                          ? () => _startWorkout(context, ref)
-                          : null,
-                      icon: const Icon(Icons.play_arrow, size: 18),
-                      label: const Text('开练'),
-                    ),
                     const Spacer(),
                     IconButton(
                       key: fitnessPlanEditKey(plan.id),
@@ -280,31 +253,6 @@ class _PlanCard extends ConsumerWidget {
       context: context,
       builder: (_) => FitnessPlanEditorSheet(plan: plan),
     );
-  }
-
-  /// 一键开练（§11.2 W14 任务 2）：先建会话行（§5.5⑦ type=template_instance、
-  /// source=plan、start_at=开练时刻，§6.2 outbox 同事务），再进开练页。
-  Future<void> _startWorkout(BuildContext context, WidgetRef ref) async {
-    final gateway = ref.read(planGatewayProvider);
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final session = await gateway.startWorkoutSession(
-        planId: plan.id,
-        date: dom.formatCalendarDay(DateTime.now()),
-      );
-      if (!context.mounted) return;
-      await Navigator.of(context).push(
-        // §4.3 /plan/fitness/:id 共享轴（§9.3#2 平级详情）。
-        SlimcaSharedAxisPageRoute<void>(
-          builder: (_) => FitnessWorkoutPage(sessionId: session.id),
-        ),
-      );
-    } catch (_) {
-      // 开练失败不打断计划页（§3.7 本地优先：错误仅提示）。
-      messenger.showSnackBar(
-        const SnackBar(content: Text('开练失败，请重试')),
-      );
-    }
   }
 }
 

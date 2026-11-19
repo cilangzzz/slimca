@@ -136,6 +136,21 @@ abstract final class TelemetryFunnel {
 
   /// 同步 pull 失败。
   static const String syncPullFail = 'sync_pull_fail';
+
+  // ── W13 留存钩子漏斗（原壳层常量收编：apps/mobile w13_funnel_events.dart
+  //    「后续若 core_domain 收编再平移」的既定迁移点；事件 wire 名与 W13
+  //    任务口径一字不差，写入方=feature_plan PlanGateway——漏斗跟随唯一
+  //    写路径，壳层双实现收敛后不在 UI 层重复埋点）。
+
+  /// 存钱目标建档（§3.6 存钱目标 P1：留存钩子首步——「设目标」）。
+  static const String savingsGoalCreated = 'savings_goal_created';
+
+  /// 投币打卡（§3.6「投币式打卡」：进度=贡献行求和 §5.5⑫——「存进去」；
+  /// 仅真实新增时记，幂等命中不重复计）。
+  static const String coinIn = 'coin_in';
+
+  /// 重复待办建档（§3.6 待办完整版 P1「重复（RRULE）」+ 提醒）。
+  static const String todoRecurrenceCreated = 'todo_recurrence_created';
 }
 
 /// 指标（metric）事件名常量（§3.9 性能监控、§9.4 帧预算、§2.3 护栏口径）。

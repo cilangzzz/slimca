@@ -110,8 +110,8 @@ class SavingsGoalDetailPage extends ConsumerWidget {
       builder: (dialogContext) => AlertDialog(
         title: const Text('删除目标？'),
         content: const Text(
-          '已投币贡献随目标一并隐藏（append-only 贡献行保留，可整库导出回溯，'
-          '§5.5⑫）；删除为软删墓碑，同步端一致（§6.5）。',
+          '已投币贡献随目标一并隐藏（append-only 贡献行保留，可整库导出回溯）；'
+          '删除后各设备同步一致。',
         ),
         actions: [
           TextButton(
@@ -217,7 +217,7 @@ class _ContributionHistory extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('贡献历史（append-only，§5.5⑫）',
+            Text('贡献历史',
                 style: TextStyle(fontSize: 13, color: tokens.onSurfaceMuted)),
             const SizedBox(height: 8),
             if (contributions == null)
@@ -228,7 +228,7 @@ class _ContributionHistory extends StatelessWidget {
             else if (contributions!.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
-                child: Text('还没有投币记录，今天开始（§3.6 投币打卡）',
+                child: Text('还没有投币记录，今天开始',
                     style: TextStyle(
                         fontSize: 14, color: tokens.onSurfaceMuted)),
               )

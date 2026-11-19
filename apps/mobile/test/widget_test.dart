@@ -16,17 +16,15 @@
 // 无目标引导创建（§11.2 W13 任务 1/2；建档→投币→数字变化 e2e 见
 // savings_progress_card_test.dart）。
 //
-// W7-8（第二个用例）：我的 Tab → raw_input 上云开关默认关（§3.3/§3.7）→
-// 开关写回 settings 表（§5.6⑲ JSON 值）；V1 UX 插曲（《UI-规范与重设计》
-// §4.1）后：设置页按定稿 IA 重排（账号/同步卡→分组卡→尾部低频组），断言
-// 「升级计划」无露出（IAP 代码保留、UI 不露出）+ 危险项确认弹窗（§4.3）。
+// W7-8（第二个用例）：我的 Tab → 分组卡 IA 渲染；V1 UX 插曲（《UI-规范与
+// 重设计》§4.1）后：设置页按定稿 IA 重排（账号/同步卡→分组卡→尾部低频组），
+// 「数据与隐私」开关组已移除（用户拍板，底层策略与 settings 落库机制保留），
+// 断言「升级计划」无露出（IAP 代码保留、UI 不露出）+ 危险项确认弹窗（§4.3）。
 //
 // 测试装配：内存 Drift 库 + 固定 device_id 的 HlcClock 直接 override（不跑
 // bootstrap()，避免测试写真实文件库）；feature_capture 网关/解析器按
 // bootstrap() 同款工厂注入（§10.4）；内置账本种子用 ensureDefaultLedgers
 // 补齐（§5.4）。Windows 宿主缺 sqlite3 运行库时温和跳过（与 core_db 同策略）。
-
-import 'dart:convert';
 
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart';
@@ -34,6 +32,8 @@ import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
 import 'package:feature_capture/feature_capture.dart'
     show captureGatewayProvider, captureParserProvider, createCaptureGateway;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -140,6 +140,9 @@ void main() {
           captureGatewayProvider
               .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
           captureParserProvider.overrideWithValue(createCaptureParser()),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),
@@ -147,10 +150,12 @@ void main() {
 
     // 冷启动首帧直出（无 spinner，§2.3 步 0）：等卡片墙级联上浮播完（§9.3#1）。
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('Slimca'), findsOneWidget); // AppBar 标题
+    // 完整壳已起（首页 AppBar 无产品名标题——用户拍板移除「Slimca」字样）。
+    expect(find.text('Slimca'), findsNothing);
 
-    // §4.2 四 Tab：今天 / 账本 / 计划 / 我的。
-    expect(find.text('今天'), findsOneWidget);
+    // §4.2 四 Tab：今天 / 账本 / 计划 / 我的（「今天」×2 = 底部 Tab +
+    // 首页日历「今天」锚定 pill，SlimcaCalendar §3.2 今日锚定簇）。
+    expect(find.text('今天'), findsNWidgets(2));
     expect(find.text('账本'), findsOneWidget);
     expect(find.text('计划'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
@@ -177,10 +182,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('capture_amount_display')), findsOneWidget);
 
-    // 数字键盘输入 ¥25.50（分存储转换，杜绝浮点 §5.1）。
-    for (final key in const ['2', '5', '.', '5', '0']) {
-      await tester.tap(find.byKey(ValueKey('capture_key_$key')));
-    }
+    // 金额滚动直输（数字键盘类型 §7.3）：enterText ¥25.50（分存储转换，
+    // 杜绝浮点 §5.1）。
+    await tester.enterText(
+      find.byKey(const ValueKey('capture_amount_display')),
+      '25.50',
+    );
     await tester.pump();
     expect(find.text('25.50'), findsOneWidget);
 
@@ -266,13 +273,15 @@ void main() {
     // 说通道：面板标题 + 麦克风入口（Fake 链路只通面板，§3.3）。
     expect(find.text('说一笔'), findsOneWidget);
     expect(find.byKey(const Key('voice_capture_mic')), findsOneWidget);
-    // 拍通道（§11.2 W11-12 任务 2「『拍』段启用」）：面板标题 + 拍照/相册
-    // 双入口（仅入口渲染，不发起拍照——零平台通道/零网络）。
+    // 拍通道（§11.2 W11-12 任务 2「『拍』段启用」）：面板标题 + 拍照单一
+    // 入口（仅入口渲染，不发起拍照——零平台通道/零网络；相册按钮不再
+    // 并列露出，§10.4 单一入口纪律）。
     await tester.tap(find.byKey(const Key('capture_channel_photo')));
     await tester.pump();
     expect(find.text('拍一笔'), findsOneWidget);
     expect(find.byKey(const Key('capture_photo_camera')), findsOneWidget);
-    expect(find.byKey(const Key('capture_photo_gallery')), findsOneWidget);
+    expect(find.byKey(const Key('capture_photo_gallery')), findsNothing,
+        reason: '拍照单一入口：相册选择不重复露出');
     await tester.tap(find.byKey(const Key('capture_channel_text')));
     await tester.pump();
     expect(find.text('记一笔'), findsOneWidget, reason: '切回写通道复现 CapturePage');
@@ -334,26 +343,28 @@ void main() {
     await tester.tap(find.byType(BackButton));
     await tester.pumpAndSettle();
 
-    // ── W5-6：计划 Tab 真页（§4.2 三卡 + §3.6 待办快速添加）──────────
+    // ── W5-6：计划 Tab 真页（IA 重设计「今日为纲」：今日待办/今日健身/
+    //    今日存钱三卡 + 收集箱/存钱目标/健身计划三个域尾行入口）──────────
     await tester.tap(find.text('计划'));
     await tester.pumpAndSettle();
-    expect(find.text('待办'), findsOneWidget);
-    expect(find.text('健身'), findsOneWidget);
+    expect(find.text('今日待办'), findsOneWidget);
+    expect(find.text('今日健身'), findsOneWidget);
     expect(find.text('记录健身'), findsOneWidget,
-        reason: '§4.3 /plan/fitness 子路由入口');
-    // W13 存钱卡（§3.6、§11.2 W13 任务 1）：占位换真数据——空态引导建档
-    // + 新建目标入口（建档/投币流 e2e 见 savings_progress_card_test）。
+        reason: '健身卡尾「记录健身」→ 包版健身记录页（唯一手记入口）');
+    // W13 存钱卡（§3.6、§11.2 W13 任务 1）：空态引导建档（尾行唯一入口，
+    // 建档/投币流 e2e 见 savings_progress_card_test）。
     expect(find.textContaining('设定第一个存钱目标'), findsOneWidget,
         reason: '§11.2 W13 存钱卡空态=无目标引导创建');
-    expect(find.text('新建目标'), findsOneWidget,
-        reason: '§11.2 W13 存钱目标入口');
-    // W14 健身计划卡（§11.2 W14 任务 1「计划 Tab 接健身计划入口」）：空库
-    // 空态=排期空态 + 计划空态引导；排期卡/训练链路 e2e 见
-    // plan_schedule_card_test.dart。
+    expect(find.text('存钱目标'), findsOneWidget,
+        reason: '存钱尾行唯一入口 → /plan/savings');
+    // W14 健身计划入口（§11.2 W14 任务 1）：卡尾唯一模板入口；空态=无排期
+    // 引导；排期卡/训练链路 e2e 见 plan_schedule_card_test.dart。
     expect(find.text('健身计划'), findsOneWidget);
-    expect(find.textContaining('还没有启用中的健身计划'), findsOneWidget,
-        reason: '§11.2 W14 健身计划卡空态=无启用计划引导');
-    // 待办快速添加 → 当日流即时重发（§5.5⑩）。
+    expect(find.textContaining('今天没有健身安排'), findsOneWidget,
+        reason: '§11.2 W14 健身卡空态=无排期引导（计划列表段已下沉）');
+    expect(find.textContaining('收集箱'), findsOneWidget,
+        reason: '待办卡尾收集箱唯一入口');
+    // 待办快速添加 → 当日实例流即时重发（§5.5⑩）。
     await tester.enterText(
       find.byKey(const Key('plan_todo_input')),
       '冥想 10 分钟',
@@ -361,13 +372,14 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const Key('plan_todo_add')));
     await _pumpUntilFound(tester, find.text('冥想 10 分钟'));
-    // 勾选完成 → done/total 计数刷新（§3.6 勾选完成、done_at 只前进 §6.5）。
-    await tester.tap(find.text('冥想 10 分钟'));
+    // 勾选完成（勾选框就地 1 tap）→ done/total 计数刷新（§3.6 勾选完成、
+    // done_at 只前进 §6.5；行点=编辑抽屉，勾选走勾选框——本页恰一枚勾选框）。
+    await tester.tap(find.byType(Checkbox));
     await _pumpUntilFound(tester, find.text('1/1'));
   });
 
-  testWidgets('W7-8+V1 插曲冒烟：raw_input 上云开关默认关+settings 落库 → '
-      '设置页 IA 重设计（§4.1：无「升级计划」露出、分组卡/行、危险项弹窗）',
+  testWidgets('W7-8+V1 插曲冒烟：设置页 IA 渲染（§4.1：无「升级计划」露出、'
+      '分组卡/行、危险项弹窗）',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(900, 1800);
     tester.view.devicePixelRatio = 1.0;
@@ -395,6 +407,9 @@ void main() {
           captureGatewayProvider
               .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
           captureParserProvider.overrideWithValue(createCaptureParser()),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),
@@ -410,35 +425,8 @@ void main() {
     expect(find.textContaining('本地回环'), findsOneWidget);
 
     // §4.1 分组头（分组卡渲染，SlimcaMenuGroup）。
-    expect(find.text('数据与隐私'), findsOneWidget);
     expect(find.text('外观'), findsOneWidget);
     expect(find.text('数据'), findsOneWidget);
-
-    // raw_input 上云开关（§3.7 数据主权、§3.3 默认关=即用即焚；Switch 行）。
-    expect(find.text('原文上云（raw_input）'), findsOneWidget);
-    final switchFinder = find.byKey(settingsRawInputSwitchKey);
-    expect(switchFinder, findsOneWidget);
-    expect(
-      tester.widget<Switch>(switchFinder).value,
-      isFalse,
-      reason: '默认关（§3.3）',
-    );
-
-    // 开 → 运行期持有翻转 + settings 表落库（§5.6⑲ value 一律 JSON）。
-    await tester.tap(switchFinder);
-    await tester.pumpAndSettle();
-    expect(tester.widget<Switch>(switchFinder).value, isTrue);
-    final row = await database
-        .customSelect(
-          "SELECT value FROM settings WHERE key = 'raw_input_cloud_enabled'",
-        )
-        .getSingle();
-    expect(jsonDecode(row.data['value']! as String), isTrue);
-
-    // 关回默认档（数据主权：随时可撤回，§3.7）。
-    await tester.tap(switchFinder);
-    await tester.pumpAndSettle();
-    expect(tester.widget<Switch>(switchFinder).value, isFalse);
 
     // ── §4.1 移除决策：设置页无「升级计划」露出（IAP 代码保留、UI 不露出，
     //    转化触点收敛到 AI 免费额度降级提示 §7.4）────────────────────────

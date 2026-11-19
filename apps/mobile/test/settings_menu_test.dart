@@ -1,12 +1,12 @@
 // V1 UX 插曲专项验收（《UI-规范与重设计》§4 设置/菜单页重设计 + §5 审计 #4）。
 //
-// 与 widget_test.dart 第二用例（壳冒烟：IA 渲染 + 无「升级计划」断言 +
-// raw_input 开关落库）互补，本文件聚焦三块定稿验收线：
+// 与 widget_test.dart 第二用例（壳冒烟：IA 渲染 + 无「升级计划」断言）
+// 互补，本文件聚焦三块定稿验收线：
 // 1. **无「升级计划」断言**（§4.1 移除决策）：IAP 抽象代码保留但 UI 全部不
 //    露出——付费墙区块/裸恢复购买入口/SKU 目录均不渲染；
-// 2. **菜单交互**（§4.1 IA + §4.3）：拍照即焚开关 toggle 写回 settings ⑲、
-//    主题入口唤起编辑面板（W16 漏斗首步）、危险项「清空数据」确认弹窗
-//    （具体动词按钮 + 取消路径 + 确认路径边界提示）；
+// 2. **菜单交互**（§4.1 IA + §4.3）：主题入口唤起编辑面板（W16 漏斗首步）、
+//    危险项「清空数据」确认弹窗（具体动词按钮 + 取消路径 + 确认路径边界
+//    提示）——「数据与隐私」开关组已移除（用户拍板），不再覆盖；
 // 3. **删除 undo e2e**（§4.3「常规单条删除走 snackbar undo」+ §5 审计 #4）：
 //    仪表盘今日记录卡删除 → 乐观移除 + SnackBar 撤销 → 撤回后条目回归且
 //    墓碑未落库；不撤销（超时）→ 软删墓碑提交（§6.5「墓碑拒绝复活」→
@@ -22,6 +22,8 @@ import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
 import 'package:feature_capture/feature_capture.dart'
     show captureGatewayProvider, captureParserProvider, createCaptureGateway;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -33,8 +35,6 @@ import 'package:slimca/app/router.dart' show slimcaRouter;
 import 'package:slimca/data/drift_repositories.dart' show DriftEntryRepository;
 import 'package:slimca/features/settings/settings_page.dart';
 import 'package:slimca/main.dart';
-import 'package:slimca/settings/photo_burn_setting.dart'
-    show kSettingPhotoBurnAfterParse;
 
 /// 判断是否为「宿主缺 sqlite3 运行库」类错误（复刻 widget_test 口径）。
 bool _isSqliteLibraryMissing(Object error) {
@@ -84,6 +84,9 @@ Future<void> _pumpApp(WidgetTester tester, db.AppDatabase database) async {
         captureGatewayProvider
             .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
         captureParserProvider.overrideWithValue(createCaptureParser()),
+        planGatewayProvider.overrideWithValue(
+          createPlanGateway(db: database, clock: clock),
+        ),
       ],
       child: const SlimcaApp(),
     ),
@@ -123,13 +126,12 @@ void main() {
     // ── §4.1 IA：顶部账号/同步卡（非 ListTile）→ 分组卡 → 尾部低频组 ──
     expect(find.text('本地账簿'), findsOneWidget,
         reason: '§4.1 顶部账号/同步卡（头像位 + 同步状态只读一行）');
-    for (final header in const ['数据与隐私', '外观', '数据']) {
+    for (final header in const ['AI 服务', '外观', '数据']) {
       expect(find.text(header), findsOneWidget,
           reason: '§4.1 分组头（Label Large 14/500，SlimcaMenuGroup）');
     }
     for (final row in const [
-      '原文上云（raw_input）',
-      '拍照原图解析后即焚',
+      'AI 服务配置',
       '主题',
       '同步',
       '数据导出',
@@ -159,8 +161,8 @@ void main() {
         reason: '清空数据行红字（§4.3 红色文字按钮，不做填充块）');
   });
 
-  testWidgets('V1 插曲：菜单交互——即焚开关写回 settings ⑲、主题入口唤起面板、'
-      '危险项弹窗取消/确认路径（§4.3/§11.2 W11-12）', (WidgetTester tester) async {
+  testWidgets('V1 插曲：菜单交互——主题入口唤起面板、危险项弹窗取消/确认路径'
+      '（§4.3/W16）', (WidgetTester tester) async {
     tester.view.physicalSize = const Size(900, 2400);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -173,25 +175,6 @@ void main() {
 
     await _pumpApp(tester, database);
     await _openSettings(tester);
-
-    // ── 拍照原图即焚开关（默认开 §3.7/§11.2 任务 3）→ 关 → settings 落库 ──
-    final burnSwitch = find.byKey(settingsPhotoBurnSwitchKey);
-    expect(tester.widget<Switch>(burnSwitch).value, isTrue,
-        reason: '默认开=即焚（合规缺省 §3.3）');
-    await tester.tap(burnSwitch);
-    await tester.pumpAndSettle();
-    expect(tester.widget<Switch>(burnSwitch).value, isFalse);
-    final burnRow = await database
-        .customSelect(
-          "SELECT value FROM settings WHERE key = '$kSettingPhotoBurnAfterParse'",
-        )
-        .getSingle();
-    expect(burnRow.data['value'], 'false',
-        reason: 'settings ⑲ value 一律 JSON（§5.6⑲）');
-    // 关=本机留档档位（关回默认开收尾，§3.7 随时可撤回）。
-    await tester.tap(burnSwitch);
-    await tester.pumpAndSettle();
-    expect(tester.widget<Switch>(burnSwitch).value, isTrue);
 
     // ── 主题入口（§11.2 W16 任务 1）：唤起主题编辑面板（弹簧 sheet）────
     await tester.tap(find.byKey(settingsThemeEntryKey));
@@ -276,6 +259,9 @@ void main() {
           captureGatewayProvider
               .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
           captureParserProvider.overrideWithValue(createCaptureParser()),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),

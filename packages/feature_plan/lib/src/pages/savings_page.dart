@@ -128,8 +128,7 @@ class _EmptyState extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               '365 天挑战 / 52 周挑战 / 自定义目标，每天投币打卡；'
-              '进度 = Σ贡献行，append-only 免同步冲突'
-              '（§3.6 存钱目标 P1、§5.5⑫）',
+              '进度 = Σ贡献行，append-only 免同步冲突',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: tokens.onSurfaceMuted),
             ),

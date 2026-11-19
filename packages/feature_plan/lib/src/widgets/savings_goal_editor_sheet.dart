@@ -21,6 +21,7 @@ import 'package:ui_kit/ui_kit.dart';
 
 import '../plan_gateway.dart';
 import '../plan_models.dart';
+import 'plan_sheet_sizing.dart';
 import 'plan_text_field.dart';
 
 /// 名称输入测试锚点。
@@ -152,129 +153,148 @@ class _SavingsGoalEditorSheetState
           : unitMinor * (kWeek52Slots * (kWeek52Slots + 1) ~/ 2),
       _MethodKind.custom => null,
     };
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+    // 稳定高度外框（planSheetHeight，与 capture 录入抽屉同口径）：内容区
+    // 键盘内收、滚动承载长内容，主 CTA「创建目标」钉底（外框高度恒定）。
+    return SizedBox(
+      height: planSheetHeight(context),
+      child: Padding(
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              '新建存钱目标',
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: tokens.onSurface),
-            ),
-            const SizedBox(height: 12),
-            PlanTextField(
-              key: savingsNameFieldKey,
-              initial: _nameText,
-              hint: '目标名（如 旅行基金）',
-              onChanged: (v) => setState(() => _nameText = v),
-            ),
-            const SizedBox(height: 12),
-            Text('存钱法（§5.5⑪ method）',
-                style: TextStyle(fontSize: 13, color: tokens.onSurfaceMuted)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final kind in _MethodKind.values)
-                  ChoiceChip(
-                    key: savingsMethodChipKey(_methodWire(kind)),
-                    label: Text(_methodLabel(kind)),
-                    selected: _method == kind,
-                    onSelected: (_) => setState(() {
-                      _method = kind;
-                      // 每格基数随档位回填经典缺省（用户已改值则保留）。
-                      final defaultText =
-                          _defaultUnitYuan(kind).toStringAsFixed(0);
-                      final isPrevDefault = _unitText == '1' ||
-                          _unitText == '10' ||
-                          _unitText.isEmpty;
-                      if (kind != _MethodKind.custom && isPrevDefault) {
-                        _unitText = defaultText;
-                      }
-                    }),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            if (_method != _MethodKind.custom) ...[
-              Text('每格基数（元）：第 N ${_method == _MethodKind.daily365 ? '天' : '周'}存 N×基数',
-                  style: TextStyle(
-                      fontSize: 13, color: tokens.onSurfaceMuted)),
-              const SizedBox(height: 8),
-              PlanTextField(
-                key: savingsUnitFieldKey,
-                initial: _unitText,
-                hint: _method == _MethodKind.daily365 ? '如 1' : '如 10',
-                keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true),
-                onChanged: (v) => setState(() => _unitText = v),
-              ),
-              if (challengeTarget != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    '目标 ≈ ${(challengeTarget / 100).toStringAsFixed(2)} 元'
-                    '（${_method == _MethodKind.daily365 ? '365' : '52'} 格递增求和，§3.6）',
-                    style: TextStyle(
-                        fontSize: 13, color: tokens.onSurfaceMuted),
-                  ),
-                ),
-            ] else ...[
-              Text('目标金额（元）',
-                  style: TextStyle(
-                      fontSize: 13, color: tokens.onSurfaceMuted)),
-              const SizedBox(height: 8),
-              PlanTextField(
-                key: savingsTargetFieldKey,
-                initial: _targetText,
-                hint: '如 10000',
-                keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true),
-                onChanged: (v) => setState(() => _targetText = v),
-              ),
-              const SizedBox(height: 12),
-              Text('每日投币额（元）',
-                  style: TextStyle(
-                      fontSize: 13, color: tokens.onSurfaceMuted)),
-              const SizedBox(height: 8),
-              PlanTextField(
-                key: savingsDailyFieldKey,
-                initial: _dailyText,
-                hint: '如 20',
-                keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true),
-                onChanged: (v) => setState(() => _dailyText = v),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  TextButton(
-                    key: savingsDeadlinePickKey,
-                    onPressed: _pickDeadline,
-                    child: Text(_deadline ?? '截止日（可选）'),
-                  ),
-                  if (_deadline != null)
-                    IconButton(
-                      tooltip: '清除截止日',
-                      icon: const Icon(Icons.close, size: 18),
-                      onPressed: () => setState(() => _deadline = null),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '新建存钱目标',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: tokens.onSurface),
                     ),
-                ],
+                    const SizedBox(height: 12),
+                    PlanTextField(
+                      key: savingsNameFieldKey,
+                      initial: _nameText,
+                      hint: '目标名（如 旅行基金）',
+                      onChanged: (v) => setState(() => _nameText = v),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('存钱法',
+                        style: TextStyle(
+                            fontSize: 13, color: tokens.onSurfaceMuted)),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final kind in _MethodKind.values)
+                          ChoiceChip(
+                            key: savingsMethodChipKey(_methodWire(kind)),
+                            label: Text(_methodLabel(kind)),
+                            selected: _method == kind,
+                            onSelected: (_) => setState(() {
+                              _method = kind;
+                              // 每格基数随档位回填经典缺省（用户已改值则保留）。
+                              final defaultText =
+                                  _defaultUnitYuan(kind).toStringAsFixed(0);
+                              final isPrevDefault = _unitText == '1' ||
+                                  _unitText == '10' ||
+                                  _unitText.isEmpty;
+                              if (kind != _MethodKind.custom && isPrevDefault) {
+                                _unitText = defaultText;
+                              }
+                            }),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (_method != _MethodKind.custom) ...[
+                      Text(
+                          '每格基数（元）：第 N ${_method == _MethodKind.daily365 ? '天' : '周'}存 N×基数',
+                          style: TextStyle(
+                              fontSize: 13, color: tokens.onSurfaceMuted)),
+                      const SizedBox(height: 8),
+                      PlanTextField(
+                        key: savingsUnitFieldKey,
+                        initial: _unitText,
+                        hint: _method == _MethodKind.daily365 ? '如 1' : '如 10',
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        onChanged: (v) => setState(() => _unitText = v),
+                      ),
+                      if (challengeTarget != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            '目标 ≈ ${(challengeTarget / 100).toStringAsFixed(2)} 元'
+                            '（${_method == _MethodKind.daily365 ? '365' : '52'} 格递增求和）',
+                            style: TextStyle(
+                                fontSize: 13, color: tokens.onSurfaceMuted),
+                          ),
+                        ),
+                    ] else ...[
+                      Text('目标金额（元）',
+                          style: TextStyle(
+                              fontSize: 13, color: tokens.onSurfaceMuted)),
+                      const SizedBox(height: 8),
+                      PlanTextField(
+                        key: savingsTargetFieldKey,
+                        initial: _targetText,
+                        hint: '如 10000',
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        onChanged: (v) => setState(() => _targetText = v),
+                      ),
+                      const SizedBox(height: 12),
+                      Text('每日投币额（元）',
+                          style: TextStyle(
+                              fontSize: 13, color: tokens.onSurfaceMuted)),
+                      const SizedBox(height: 8),
+                      PlanTextField(
+                        key: savingsDailyFieldKey,
+                        initial: _dailyText,
+                        hint: '如 20',
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        onChanged: (v) => setState(() => _dailyText = v),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          TextButton(
+                            key: savingsDeadlinePickKey,
+                            onPressed: _pickDeadline,
+                            child: Text(_deadline ?? '截止日（可选）'),
+                          ),
+                          if (_deadline != null)
+                            IconButton(
+                              tooltip: '清除截止日',
+                              icon: const Icon(Icons.close, size: 18),
+                              onPressed: () => setState(() => _deadline = null),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
               ),
-            ],
-            const SizedBox(height: 16),
-            FilledButton(
-              key: savingsGoalSubmitKey,
-              onPressed: _canSubmit ? _submit : null,
-              child: const Text('创建目标'),
+            ),
+            // 主 CTA 钉底（唯一填充按钮，通栏宽度）。
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  key: savingsGoalSubmitKey,
+                  onPressed: _canSubmit ? _submit : null,
+                  child: const Text('创建目标'),
+                ),
+              ),
             ),
           ],
         ),

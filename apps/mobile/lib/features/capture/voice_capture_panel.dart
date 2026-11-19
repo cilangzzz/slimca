@@ -80,20 +80,45 @@ class _VoiceCapturePanelState extends ConsumerState<VoiceCapturePanel> {
       case CaptureAiStage.input:
         body.addAll(_inputStage(context, form));
       case CaptureAiStage.parsing:
-        // 解析中呼吸态（与文本通道同一骨架组件，§9.4 ≤100ms）。
-        body.add(const Padding(
-          padding: EdgeInsets.symmetric(vertical: 24),
-          child: CaptureParsingState(),
+        // 解析中呼吸态（与文本通道同一骨架组件，§9.4 ≤100ms）——填充式居中。
+        body.add(const Expanded(
+          child: Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: CaptureParsingState(),
+            ),
+          ),
         ));
       case CaptureAiStage.confirm:
         if (form != null) {
-          // 确认卡复用 feature_capture 导出组件；onConfirm 由本面板覆盖
-          // 提交口（source=voice，§5.2①）。
-          body.add(CaptureConfirmCard(
-            form: form,
-            controller: notifier,
-            onConfirm: () => _submitVoice(form),
-          ));
+          // 统一抽屉高度口径：卡面滚动 + 动作页脚钉底（确认落库 CTA 恒可见，
+          // §2.3 步骤 5）；确认卡复用 feature_capture 导出组件，onConfirm 由
+          // 本面板覆盖提交口（source=voice，§5.2①）。
+          return Material(
+            color: tokens.surface,
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _VoiceHeader(),
+                  Flexible(
+                    child: CaptureConfirmStage(
+                      form: form,
+                      controller: notifier,
+                      onConfirm: () => _submitVoice(form),
+                      scrollPadding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                      // 面板自管提交（source=voice 直调网关，不经控制器
+                      // submitting/errorText）：失败文案经阶段级插槽就地
+                      // 提示可重试（§2.4-3），不再静默停留。
+                      errorText: _errorText,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
         }
       case CaptureAiStage.manualFallback:
         body.addAll(_fallbackStage(context, form, notifier));
@@ -104,16 +129,17 @@ class _VoiceCapturePanelState extends ConsumerState<VoiceCapturePanel> {
       child: SafeArea(
         top: false,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _VoiceHeader(),
+            // 统一高度框内填充式布局：转写卡扩展吃满、麦克风簇贴底；
+            // 降级簇贴底（大厂输入面板口径，无空白死角）。
             Flexible(
-              child: SingleChildScrollView(
+              child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisAlignment: MainAxisAlignment.end,
                   children: body,
                 ),
               ),
@@ -131,12 +157,38 @@ class _VoiceCapturePanelState extends ConsumerState<VoiceCapturePanel> {
     final textTheme = Theme.of(context).textTheme;
     final transcript = _transcript;
     return [
+      // 转写卡（composer 口径：常驻扩展吃满剩余空间，空态占位文案）——
+      // 空白被转写面吸收，长转写内滚（§3.3 语音通道）。
+      Expanded(
+        child: Container(
+          key: voiceCaptureTranscriptKey,
+          width: double.infinity,
+          padding: EdgeInsets.all(context.spacing.space150),
+          decoration: BoxDecoration(
+            color: tokens.surfaceCard,
+            borderRadius: BorderRadius.circular(context.sizes.radiusGroupCard),
+            border: Border.all(color: tokens.outline),
+          ),
+          child: SingleChildScrollView(
+            child: Text(
+              transcript != null
+                  ? '「$transcript」'
+                  : '点按下方麦克风，说了什么会显示在这里（§3.3）',
+              style: textTheme.bodyMedium?.copyWith(
+                color: transcript != null
+                    ? tokens.onSurface
+                    : tokens.onSurfaceMuted,
+              ),
+            ),
+          ),
+        ),
+      ),
+      SizedBox(height: context.spacing.space200),
       // 麦克风主按钮（§3.3 语音通道入口；W5-6 经 FakeTranscriber 出文本）。
       Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 8),
             Material(
               color: _transcribing ? tokens.surfaceMuted : tokens.primary,
               shape: const CircleBorder(),
@@ -172,23 +224,7 @@ class _VoiceCapturePanelState extends ConsumerState<VoiceCapturePanel> {
           ],
         ),
       ),
-      const SizedBox(height: 16),
       if (transcript != null) ...[
-        // 转写文本（可直接改吗？——原文经控制器 inputText 进解析管线，
-        // 展示只读；改写走「写」通道，§7.4 原文保留语义）。
-        Container(
-          key: voiceCaptureTranscriptKey,
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: tokens.surfaceMuted,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            '「$transcript」',
-            style: textTheme.bodyMedium?.copyWith(color: tokens.onSurface),
-          ),
-        ),
         const SizedBox(height: 14),
         Row(
           children: [
@@ -210,10 +246,8 @@ class _VoiceCapturePanelState extends ConsumerState<VoiceCapturePanel> {
                   foregroundColor: tokens.onPrimary,
                   disabledBackgroundColor: tokens.surfaceMuted,
                   disabledForegroundColor: tokens.onSurfaceMuted,
-                  minimumSize: const Size.fromHeight(48),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
+                  minimumSize: Size.fromHeight(context.sizes.minTouchTarget),
+                  shape: const StadiumBorder(), // §7.1 按钮胶囊（M3 full）
                 ),
                 child: const Text(
                   '解析',
@@ -223,21 +257,16 @@ class _VoiceCapturePanelState extends ConsumerState<VoiceCapturePanel> {
             ),
           ],
         ),
-        const SizedBox(height: 8),
       ],
       if (_errorText != null) ...[
-        Text(
-          _errorText!,
-          key: const ValueKey('voice_capture_error'),
-          style: TextStyle(fontSize: 13, color: tokens.danger),
-        ),
         const SizedBox(height: 8),
+        CaptureErrorText(
+          text: _errorText!,
+          testKey: const ValueKey('voice_capture_error'),
+        ),
       ],
       if (form != null && form.errorText != null)
-        Text(
-          form.errorText!,
-          style: TextStyle(fontSize: 13, color: tokens.danger),
-        ),
+        CaptureErrorText(text: form.errorText!),
     ];
   }
 
@@ -287,10 +316,8 @@ class _VoiceCapturePanelState extends ConsumerState<VoiceCapturePanel> {
               style: FilledButton.styleFrom(
                 backgroundColor: tokens.primary,
                 foregroundColor: tokens.onPrimary,
-                minimumSize: const Size.fromHeight(48),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
+                minimumSize: Size.fromHeight(context.sizes.minTouchTarget),
+                shape: const StadiumBorder(), // §7.1 按钮胶囊（M3 full）
               ),
               child: const Text(
                 '返回重试',

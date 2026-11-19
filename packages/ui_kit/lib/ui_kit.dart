@@ -42,3 +42,7 @@ export 'src/components/calendar_strip.dart';
 export 'src/components/month_grid.dart';
 export 'src/components/calendar.dart';
 export 'src/components/menu.dart';
+// W17 插曲第二波（底栏重设计拍板，定型条目见《UI-规范与重设计》§2.2 增补段）：
+// 花瓣形 FAB ShapeBorder（M3 Expressive cookie，拍板推导）——凹槽 cradle
+// 一体化底栏的中央按钮形态
+export 'src/components/cookie_fab_shape.dart';

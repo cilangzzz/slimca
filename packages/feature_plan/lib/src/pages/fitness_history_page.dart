@@ -100,7 +100,7 @@ class _FitnessHistoryPageState extends ConsumerState<FitnessHistoryPage> {
                 : sessions.isEmpty
                     ? Center(
                         child: Text(
-                          '暂无训练记录（§11.2 W14）',
+                          '暂无训练记录',
                           style: TextStyle(
                               fontSize: 14, color: tokens.onSurfaceMuted),
                         ),

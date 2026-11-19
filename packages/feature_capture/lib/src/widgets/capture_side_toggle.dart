@@ -56,7 +56,7 @@ class CaptureSideToggle extends StatelessWidget {
       curve: motion.springSnappy.curve,
       decoration: BoxDecoration(
         color: selected ? tokens.primary.withValues(alpha: 0.12) : tokens.surfaceMuted,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(context.sizes.radiusGroupCard),
         border: Border.all(
           color: selected ? tokens.primary : tokens.outline,
           width: selected ? 1.5 : 1,
@@ -66,16 +66,17 @@ class CaptureSideToggle extends StatelessWidget {
         type: MaterialType.transparency,
         child: InkWell(
           key: ValueKey('capture_side_${side.wire}'),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(context.sizes.radiusGroupCard),
           onTap: () => onChanged(side),
           child: SizedBox(
-            height: 40,
+            // §6.3/§13.2 触控目标 ≥48（SlimcaSizes.minTouchTarget 已定稿）。
+            height: context.sizes.minTouchTarget,
             child: Center(
               child: Text(
                 _labels[side]!,
                 style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  fontSize: 14, // §5 Label Large 14/20/500 口径
+                  fontWeight: selected ? FontWeight.w500 : FontWeight.w400,
                   color: selected ? tokens.primary : tokens.onSurfaceMuted,
                 ),
               ),

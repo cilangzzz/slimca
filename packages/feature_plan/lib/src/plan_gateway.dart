@@ -59,10 +59,16 @@ final Provider<PlanGateway> planGatewayProvider = Provider<PlanGateway>(
 /// 规则），故网关内投影恒非空，并注入各 DAO（存钱进度驱动
 /// day_summary.savings_progress「写后重算当日」在 DAO 写事务内完成，
 /// §5.6⑬ W13 实装）。
+///
+/// [telemetry] 缺省 null（测试/未装配环境零副作用）：W13 留存钩子漏斗
+/// （savings_goal_created / coin_in / todo_recurrence_created）跟随唯一写
+/// 路径在网关侧记——壳层双实现收敛后不在 UI 层重复埋点（事件名常量见
+/// core_domain TelemetryFunnel W13 段）。
 PlanGateway createPlanGateway({
   required cdb.AppDatabase db,
   required dom.HlcClock clock,
   cdb.DaySummaryProjection? projection,
+  dom.TelemetryService? telemetry,
 }) {
   final effectiveProjection = projection ?? cdb.DaySummaryProjection(db);
   return PlanGateway._(
@@ -77,6 +83,7 @@ PlanGateway createPlanGateway({
         cdb.SavingsGoalsDao(db, projection: effectiveProjection),
     savingsContributions:
         cdb.SavingsContributionsDao(db, projection: effectiveProjection),
+    telemetry: telemetry,
   );
 }
 
@@ -91,6 +98,7 @@ class PlanGateway {
     required this.todos,
     required this.savingsGoals,
     required this.savingsContributions,
+    this.telemetry,
   })  : db = database,
         outbox = cdb.SyncOutboxWriter(database);
 
@@ -107,6 +115,9 @@ class PlanGateway {
 
   /// day_summary 投影（§5.6⑬）：恒非空，写后联动重算。
   final cdb.DaySummaryProjection projection;
+
+  /// 遥测注入点（W13 留存钩子漏斗；null=测试/未装配零副作用，§3.9）。
+  final dom.TelemetryService? telemetry;
 
   /// 事件主干仓库（core_db 实现，§10.4）。
   final cdb.DriftEntryRepository entries;
@@ -183,10 +194,10 @@ class PlanGateway {
   /// start_at 语义（§5.5⑦ 可空）：仅当日记录回填 `now - duration`（手动补记
   /// 无真实开始时刻）；非当日留 null——UI 只按日期归档展示。
   ///
-  /// outbox 注记（§6.2）：本 W5-6 路径先于 SyncOutboxWriter 落地、业务行未
-  /// 入队（生产同步经 apps/mobile FitnessService 自带入队承担）；W14 起新增
-  /// 写路径（startWorkoutSession/logExerciseSet/finishWorkoutSession/计划
-  /// CRUD）一律经 [outbox] 同事务入队，见「健身计划」小节头注记。
+  /// outbox 纪律（§6.2「业务行 + sync_outbox 同事务写入」）：会话/事件/burn
+  /// 三行在**同事务**内读回行快照入队（[outbox.enqueueRow] 读回行终态构
+  /// payload）——原 W5-6 口径「壳层 FitnessService 自带入队」已随壳层双实现
+  /// 收敛删除，手动记录写路径唯一在本网关，漏入队=静默丢同步（坑点 #4）。
   Future<String> submitFitnessSession(FitnessSessionDraft draft) async {
     // MET 估算（§3.5 kcal = MET × 体重kg × 时长h）；非法入参在此抛错。
     final kcal = estimateKcalBurn(
@@ -198,6 +209,7 @@ class PlanGateway {
     final ledger = await _ensureKcalLedger();
     final entryId = _newId();
     final sessionId = _newId();
+    final lineId = _newId();
     // 与壳侧 FitnessService._deriveTitle 同口径：「类型 + N 分钟」
     // （§5.2① title 一句话描述；apps/mobile/lib/data/fitness_service.dart）。
     final title =
@@ -231,7 +243,7 @@ class PlanGateway {
         meta: _newMeta(),
       ));
       await entryLines.upsert(dom.EntryLine(
-        id: _newId(),
+        id: lineId,
         entryId: entryId,
         type: dom.LineType.burn,
         amount: kcal,
@@ -265,6 +277,11 @@ class PlanGateway {
             schemaVer: dom.kCurrentSchemaVer,
             deviceId: clock.deviceId,
           ));
+      // ④ §6.2 出网：三行业务行快照同事务入队（enqueueRow 在业务写之后
+      // 调用，读回行终态构 payload——坑点 #4 纪律）。
+      await outbox.enqueueRow('fitness_sessions', sessionId);
+      await outbox.enqueueRow('entries', entryId);
+      await outbox.enqueueRow('entry_lines', lineId);
     });
     return sessionId;
   }
@@ -351,16 +368,34 @@ class PlanGateway {
     String? repeatRule,
     String? rruleAnchorDate,
     int? remindAt,
-  }) =>
-      todos.create(
-        title: title,
-        date: date,
-        note: note,
-        dueAt: dueAt,
-        repeatRule: repeatRule,
-        rruleAnchorDate: rruleAnchorDate,
-        remindAt: remindAt,
+  }) async {
+    final todo = await todos.create(
+      title: title,
+      date: date,
+      note: note,
+      dueAt: dueAt,
+      repeatRule: repeatRule,
+      rruleAnchorDate: rruleAnchorDate,
+      remindAt: remindAt,
+    );
+    // W13 漏斗（§11.2 W13 任务 4）：重复待办建档即记——props 只带频率枚举
+    // （§3.9 内容禁入遥测）。原壳层快速添加路径的埋点随写路径收敛迁移至此。
+    final rule = repeatRule;
+    if (telemetry != null && rule != null && rule.trim().isNotEmpty) {
+      await telemetry!.funnel(
+        dom.TelemetryFunnel.todoRecurrenceCreated,
+        props: <String, Object?>{'freq': _repeatFreqOf(rule)},
       );
+    }
+    return todo;
+  }
+
+  /// RRULE → 频率枚举（`FREQ=DAILY;…` → `daily`；无 FREQ 防御回 `?`）。
+  static String _repeatFreqOf(String rule) => rule
+      .split(';')
+      .firstWhere((p) => p.startsWith('FREQ='), orElse: () => 'FREQ=?')
+      .substring(5)
+      .toLowerCase();
 
   /// 更新待办（标题/备注/重复规则/提醒）。
   ///
@@ -376,16 +411,36 @@ class PlanGateway {
     int? remindAt,
     bool clearAnchor = false,
     String? anchorDate,
-  }) =>
-      todos.updateDetails(
-        id: id,
-        title: title,
-        note: note,
-        repeatRule: repeatRule,
-        remindAt: remindAt,
-        rruleAnchorDate:
-            clearAnchor ? null : (anchorDate ?? _unchanged),
+  }) async {
+    // W13 漏斗：重复规则「无 → 有」的建档转换与 createTodo 同口径记一次
+    // （档位编辑/清空不重复计，§3.9 props 只带频率枚举）。
+    final priorRule = repeatRule == null
+        ? null
+        : (await (db.select(db.todos)..where((t) => t.id.equals(id)))
+              .getSingleOrNull())
+            ?.repeatRule;
+    await todos.updateDetails(
+      id: id,
+      title: title,
+      note: note,
+      repeatRule: repeatRule,
+      remindAt: remindAt,
+      rruleAnchorDate:
+          clearAnchor ? null : (anchorDate ?? _unchanged),
+    );
+    final rule = repeatRule;
+    final priorHasRule =
+        priorRule != null && priorRule.trim().isNotEmpty;
+    if (telemetry != null &&
+        rule != null &&
+        rule.trim().isNotEmpty &&
+        !priorHasRule) {
+      await telemetry!.funnel(
+        dom.TelemetryFunnel.todoRecurrenceCreated,
+        props: <String, Object?>{'freq': _repeatFreqOf(rule)},
       );
+    }
+  }
 
   /// 勾选/取消完成（done_at 只前进合并，§6.5；投影联动 todo_done）。
   ///
@@ -504,8 +559,8 @@ class PlanGateway {
   /// SavingsGoalDraft 文档），自定义取显式金额；起始日缺省=设备本地今日
   /// （365/52 周存钱法「第 1 格」锚点）。写路径经 SavingsGoalsDao：outbox
   /// 同事务入队 + day_summary.savings_progress 同事务重算（§5.6⑬/§6.2）。
-  Future<cdb.SavingsGoal> createSavingsGoal(SavingsGoalDraft draft) {
-    return savingsGoals.create(
+  Future<cdb.SavingsGoal> createSavingsGoal(SavingsGoalDraft draft) async {
+    final goal = await savingsGoals.create(
       name: draft.name,
       targetMinor: draft.effectiveTargetMinor,
       method: draft.method,
@@ -513,6 +568,15 @@ class PlanGateway {
       deadline: draft.deadline,
       startedOn: draft.startedOn,
     );
+    // W13 漏斗（§11.2 W13 任务 4）：建档即记——props 只有枚举标签（§3.9
+    // 金额与名称禁入遥测）。原壳层 SavingsService 的埋点随写路径收敛迁移。
+    if (telemetry != null) {
+      await telemetry!.funnel(
+        dom.TelemetryFunnel.savingsGoalCreated,
+        props: <String, Object?>{'method': draft.method},
+      );
+    }
+    return goal;
   }
 
   /// 投币打卡（§3.6「投币式打卡」、§5.5⑫ append-only）。
@@ -535,6 +599,12 @@ class PlanGateway {
     if (goal == null) {
       throw StateError('contributeToGoal: savings_goals 无此行 $goalId');
     }
+    // W13 漏斗（§11.2 W13 任务 4）：coin_in 只记真实新增——幂等命中
+    // （同日同来源已有存活行）不重复计「存进去」，漏斗不失真（§5.5⑫）。
+    final existing = await savingsContributions.findEffective(
+      goalId: goalId,
+      date: date,
+    );
     final int amount;
     final int? effectiveSlot;
     if (amountMinor != null) {
@@ -551,13 +621,23 @@ class PlanGateway {
       amount = step.amountMinor;
       effectiveSlot = step.slot;
     }
-    return savingsContributions.append(
+    final contribution = await savingsContributions.append(
       goalId: goalId,
       amountMinor: amount,
       date: date,
       slot: effectiveSlot,
       note: note,
     );
+    if (telemetry != null && existing == null) {
+      await telemetry!.funnel(
+        dom.TelemetryFunnel.coinIn,
+        props: <String, Object?>{
+          'method': goal.method,
+          if (effectiveSlot != null) 'slot': effectiveSlot,
+        },
+      );
+    }
+    return contribution;
   }
 
   /// 目标 + 本地聚合进度流（§5.5⑫「进度=Σ贡献行」）。

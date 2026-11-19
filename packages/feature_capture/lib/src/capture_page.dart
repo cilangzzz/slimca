@@ -5,7 +5,8 @@
 /// - 仅记钱：W2 手动表单（方向 → 数字键盘 → 标题/分类/账本/日期/备注 → 保存，
 ///   §3.4 流水；编辑模式恒走此表单，金额不可变=新增修正行）；
 /// - 钱+热量 / 仅记热量：AI 双解析流状态机（[CaptureAiStage]）：
-///   文本输入区（+最近 chip 复记入口，§2.4；+拍照/相册入口，§11.2 W11-12
+///   文本输入区（+最近 chip 复记入口，§2.4；+拍照/相册入口仅独立抽屉，
+///   通道抽屉由「拍」通道承接——[CapturePage.showPhotoEntry]，§11.2 W11-12
 ///   拍照通道）→ 解析中/拍照处理中呼吸态 → 确认卡
 ///   （AI 初值预填 + count-up + 环 sweep + 置信度三色点 + 份量滑杆，§9.3#4）
 ///   → 确认落库；解析失败自动降级手填表单且原文保留（§7.4、§2.4-3）。
@@ -13,6 +14,8 @@
 /// 可经 [showCaptureSheet] 以弹簧 bottomSheet 唤起（§9.3#3），也可作为
 /// 普通页面嵌入路由。提交经 [captureControllerProvider]（AsyncNotifier）编排。
 library;
+
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,13 +26,13 @@ import 'capture_models.dart';
 import 'widgets/capture_ai_input.dart';
 import 'widgets/capture_amount_input.dart';
 import 'widgets/capture_category_picker.dart';
-import 'widgets/capture_confirm_card.dart';
+import 'widgets/capture_confirm_stage.dart';
 import 'widgets/capture_date_row.dart';
 import 'widgets/capture_direction_toggle.dart';
+import 'widgets/capture_error_text.dart';
 import 'widgets/capture_ledger_picker.dart';
 import 'widgets/capture_parsing_state.dart';
 import 'widgets/capture_photo_entry.dart';
-import 'widgets/capture_recent_chips.dart';
 import 'widgets/capture_side_toggle.dart';
 import 'widgets/capture_text_field.dart';
 
@@ -39,7 +42,33 @@ const Key captureSubmitKey = ValueKey('capture_submit');
 /// 解析失败降级横幅测试锚点（§7.4）。
 const Key captureFallbackBannerKey = ValueKey('capture_fallback_banner');
 
+/// 录入抽屉统一高度容器锚点（独立唤起抽屉与通道抽屉共用，测试断言
+/// 档位/通道/阶段切换不改变抽屉高度）。
+const Key captureSheetSizeKey = ValueKey('capture_sheet_size_box');
+
+/// 录入抽屉统一高度（本次 UX 插曲新增口径，§9.3#3 弹簧抽屉的延伸约束；
+/// 大厂输入面板口径：中低高度、内容填充、模式切换条贴底）。
+///
+/// 取视口高的 62%、带限 480–640：money 数字键盘一屏可见（键盘即主输入，
+/// 大厂记账面板同款）；写=扩展输入面（composer，字段吃满剩余空间）；
+/// 说/拍=引导卡+主操作贴底；长内容（money 全表单/确认卡/降级表单）滚动
+/// + CTA 钉底。各状态（档位/通道/阶段/键盘）切换均不改变抽屉外框尺寸；
+/// 横屏/极小屏 `min(·, height)` 防溢出兜底。
+///
+/// 键盘避让由唤起方在固定高度框内按 `MediaQuery.viewInsetsOf(context).bottom`
+/// 收缩内容区（Android 15+ targetSdk 35 强制 edge-to-edge，窗口不随键盘
+/// 收缩，钉底 CTA 须自行让出键盘；adjustResize 档窗口已缩、viewInsets 不
+/// 叠加），抽屉外框高度仍恒定。
+double captureSheetHeight(BuildContext context) {
+  final height = MediaQuery.sizeOf(context).height;
+  final bounded = math.min(math.max(height * 0.62, 480.0), 640.0);
+  return math.min(bounded, height);
+}
+
 /// 唤起录入抽屉（§9.3#3 弹簧 bottomSheet，§4.3「capture 抽屉语义」）。
+///
+/// 抽屉高度恒为 [captureSheetHeight]（与通道抽屉同口径）：W2 表单 /
+/// AI 输入 / 解析中 / 确认卡 / 降级各阶段共享同一抽屉尺寸。
 Future<void> showCaptureSheet(
   BuildContext context, {
   CaptureSeed seed = const CaptureSeed(),
@@ -48,7 +77,18 @@ Future<void> showCaptureSheet(
   return showSlimcaSpringSheet<void>(
     context: context,
     motion: MotionConfig.of(context),
-    builder: (_) => CapturePage(seed: seed, onSubmitted: onSubmitted),
+    builder: (sheetContext) => SizedBox(
+      key: captureSheetSizeKey,
+      height: captureSheetHeight(sheetContext),
+      child: Padding(
+        // 键盘避让（与 plan 系编辑抽屉同款 viewInsets 补距）：内容区收缩、
+        // 钉底 CTA 恒在键盘上方，外框高度不变（统一高度口径）。
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
+        ),
+        child: CapturePage(seed: seed, onSubmitted: onSubmitted),
+      ),
+    ),
   );
 }
 
@@ -58,6 +98,7 @@ class CapturePage extends ConsumerWidget {
     super.key,
     this.seed = const CaptureSeed(),
     this.onSubmitted,
+    this.showPhotoEntry = true,
   });
 
   /// 打开参数（编辑模式经 [CaptureSeed.editEntryId]，§3.4 修正=新增行）。
@@ -65,6 +106,13 @@ class CapturePage extends ConsumerWidget {
 
   /// 提交成功回调（传 entryId）；缺省=成功后自动关闭抽屉。
   final void Function(String entryId)? onSubmitted;
+
+  /// 拍照/相册入口是否内嵌于 AI 输入区（§11.2 W11-12）。
+  ///
+  /// 缺省 true（独立唤起的录入抽屉：该抽屉内唯一拍照入口）。录入通道抽屉
+  /// 传 false——「拍」通道已是唯一拍照入口，写通道不再重复内嵌（单一入口
+  /// 纪律，§10.4 通道编排）。
+  final bool showPhotoEntry;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -79,9 +127,9 @@ class CapturePage extends ConsumerWidget {
         _CaptureHeader(form: form),
         if (form == null)
           // build 异步装载（账本/分类/最近 chips/编辑回填）：抽屉打开 ≤280ms
-          // 预算内的过渡帧（§2.3 打开到可输入 ≤280ms）。
-          const SizedBox(
-            height: 140,
+          // 预算内的过渡帧（§2.3 打开到可输入 ≤280ms）。填充式居中——
+          // 统一高度框内不留底部空白死角。
+          const Expanded(
             child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
           )
         else ...[
@@ -96,15 +144,9 @@ class CapturePage extends ConsumerWidget {
                     .setSide(side),
               ),
             ),
-          Flexible(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-              child: form.side == CaptureSide.money
-                  ? _moneyForm(context, ref, form)
-                  : _aiFlowBody(context, ref, form),
-            ),
-          ),
-          // W2 手动表单的页脚提交位；AI 流的提交按钮内嵌在确认卡/降级表单。
+          Flexible(child: _stageArea(context, ref, form)),
+          // W2 手动表单的页脚提交位；AI 流的动作区钉底（确认卡/降级表单，
+          // 统一抽屉高度下 CTA 恒可见）。
           if (form.side == CaptureSide.money)
             _submitFooter(context, ref, form),
         ],
@@ -119,7 +161,13 @@ class CapturePage extends ConsumerWidget {
 
   // ── W2 手动 money 表单（仅记钱 / 编辑模式，§3.4）──────────────────
 
-  Widget _moneyForm(BuildContext context, WidgetRef ref, CaptureFormState form) {
+  /// money 表单滚动字段（方向/金额/标题/分类/账本/日期/备注）——金额为
+  /// 滚动直输字段（CaptureAmountField，数字键盘类型 §7.3）。
+  Widget _moneyFields(
+    BuildContext context,
+    WidgetRef ref,
+    CaptureFormState form,
+  ) {
     final notifier = ref.read(captureControllerProvider(seed).notifier);
     final editTarget = form.editTarget;
     return Column(
@@ -132,13 +180,12 @@ class CapturePage extends ConsumerWidget {
           onChanged: (direction) => notifier.setDirection(direction),
         ),
         const SizedBox(height: 14),
-        CaptureAmountInput(
+        _FieldLabel('金额（元）'),
+        CaptureAmountField(
           amountText: form.amountText,
           direction: form.direction,
           originalAmountMinor: editTarget?.amountMinor,
-          onDigit: notifier.inputDigit,
-          onDot: notifier.inputDot,
-          onBackspace: notifier.backspace,
+          onChanged: notifier.setAmountText,
         ),
         const SizedBox(height: 14),
         CaptureTextField(
@@ -175,37 +222,37 @@ class CapturePage extends ConsumerWidget {
 
   // ── W3-4 AI 双解析流（§3.3、§11.1 W3-4）──────────────────────────
 
-  /// AI 流按 [CaptureAiStage] 分流：输入区 → 解析中呼吸态 → 确认卡 /
-  /// 失败降级手填表单（§2.3 步骤 2-4、§7.4）。
-  Widget _aiFlowBody(BuildContext context, WidgetRef ref, CaptureFormState form) {
-    final notifier = ref.read(captureControllerProvider(seed).notifier);
+  /// 阶段区编排（统一抽屉高度口径）：money 表单与常规阶段在滚动区内；
+  /// 确认卡「卡面滚动 + 动作页脚钉底」（[CaptureConfirmStage]，§2.3 步骤 5
+  /// CTA 恒可见）；降级表单字段滚动 + 动作钉底（与 money 页脚同构）。
+  Widget _stageArea(
+    BuildContext context,
+    WidgetRef ref,
+    CaptureFormState form,
+  ) {
+    if (form.side == CaptureSide.money) {
+      // 金额改滚动直输（§7.3 数字键盘类型匹配任务）：无钉底自绘键盘，
+      // 全部字段同滚动区，提交页脚钉底。
+      return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+        child: _moneyFields(context, ref, form),
+      );
+    }
     switch (form.aiStage) {
       case CaptureAiStage.input:
+        // 统一高度框内 composer 填充式布局（大厂输入面板口径）：输入字段
+        // 纵向扩展吃满剩余空间、解析按钮贴底——无空白死角。Expanded 有界
+        // 包裹（Column 对非 flex 子项下发无界高度，composer 内部 Expanded
+        // 需有界父级，见 capture_ai_input.dart 注）。
+        // Column(max) 中介：Flexible 的直接子级不得再是 ParentDataWidget
+        // （Expanded/Flexible 竞争同一 RenderObject 的 FlexParentData）。
         return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 最近记录 chip 复记入口（§2.4-1「一键带入 ≤5 秒」）；空库不渲染。
-            if (form.recentEntries.isNotEmpty) ...[
-              CaptureRecentChips(
-                entries: form.recentEntries,
-                onSelected: notifier.applyRecentChip,
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                child: _aiInputBody(context, ref, form),
               ),
-              const SizedBox(height: 14),
-            ],
-            CaptureAiInput(
-              text: form.inputText,
-              side: form.side,
-              errorText: form.errorText,
-              onChanged: notifier.setInputText,
-              onParse: notifier.startParse,
-            ),
-            const SizedBox(height: 14),
-            // 拍照通道入口（§11.2 W11-12 任务 2「录入页『拍』段启用」）：
-            // 拍照/相册双入口 + §3.7 raw_input 口径隐私提示。
-            CapturePhotoEntry(
-              onCamera: () => notifier.startPhotoCapture(fromCamera: true),
-              onGallery: () => notifier.startPhotoCapture(fromCamera: false),
             ),
           ],
         );
@@ -214,23 +261,110 @@ class CapturePage extends ConsumerWidget {
         // 同步 setState，网络等待发生在骨架之后）。拍照通道经
         // photoProcessingLabel 分段文案（压缩中… → 识别中…/端侧粗估中…，
         // §11.2 W11-12）；文本/语音通道该字段为 null → 默认文案。
-        return CaptureParsingState(
-          label: form.photoProcessingLabel ?? 'AI 解析中…',
+        return _fillCenter(
+          context,
+          child: CaptureParsingState(
+            label: form.photoProcessingLabel ?? 'AI 解析中…',
+          ),
         );
       case CaptureAiStage.confirm:
-        return CaptureConfirmCard(
+        return CaptureConfirmStage(
           form: form,
-          controller: notifier,
+          controller: ref.read(captureControllerProvider(seed).notifier),
           onConfirm: () => _onAiSubmit(context, ref),
         );
       case CaptureAiStage.manualFallback:
-        return _fallbackForm(context, ref, form);
+        return _fallbackStage(context, ref, form);
     }
   }
 
-  /// 失败降级手填表单（§7.4「原输入保留 → 自动降级手填表单」；§2.4-3
-  /// 「输入页永不卡死」）：标题预填原文，热量/金额按单边开关裁剪。
-  Widget _fallbackForm(
+  /// 统一高度框内的填充式居中：短内容垂直居中（不留底部空白死角），
+  /// 内容超限回退滚动（LayoutBuilder 最小高度惯用法）。
+  Widget _fillCenter(
+    BuildContext context, {
+    required Widget child,
+    EdgeInsetsGeometry padding = const EdgeInsets.fromLTRB(20, 12, 20, 12),
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Padding(
+            padding: padding,
+            child: Center(child: child),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// AI 输入区（§2.3 步骤 2）：composer 输入面（字段扩展吃满、解析按钮
+  /// 贴底）+ 拍照/相册入口（仅独立抽屉，通道抽屉由「拍」通道承接，
+  /// [CapturePage.showPhotoEntry]）。最近 chips 由 [_stageArea] 顶置。
+  Widget _aiInputBody(
+    BuildContext context,
+    WidgetRef ref,
+    CaptureFormState form,
+  ) {
+    final notifier = ref.read(captureControllerProvider(seed).notifier);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // composer 输入面必须是 flex 子项：Column 对非 flex 子项下发
+        // 无界高度约束（flex.dart _constraintsForNonFlexChild），其内部的
+        // Expanded(field) 会以 Infinity 布局崩溃；Expanded 包裹后有界。
+        Expanded(child: CaptureAiInput(
+          text: form.inputText,
+          side: form.side,
+          errorText: form.errorText,
+          onChanged: notifier.setInputText,
+          onParse: notifier.startParse,
+          expanded: true,
+        )),
+        // 拍照通道入口（§11.2 W11-12 任务 2「录入页『拍』段启用」）：
+        // 拍照/相册双入口 + §3.7 raw_input 口径隐私提示。通道抽屉内
+        // 不渲染（showPhotoEntry=false，「拍」通道为唯一拍照入口）。
+        if (showPhotoEntry) ...[
+          const SizedBox(height: 14),
+          CapturePhotoEntry(
+            onCamera: () => notifier.startPhotoCapture(fromCamera: true),
+            onGallery: () => notifier.startPhotoCapture(fromCamera: false),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // ── 失败降级阶段（§7.4、§2.4-3「输入页永不卡死」）────────────────
+
+  /// 失败降级阶段（§7.4「原输入保留 → 自动降级手填表单」）：横幅 + 手填
+  /// 字段滚动，动作区（重试 AI 解析 + 保存）钉底恒可见。
+  Widget _fallbackStage(
+    BuildContext context,
+    WidgetRef ref,
+    CaptureFormState form,
+  ) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Flexible(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+            child: _fallbackFields(context, ref, form),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+          child: _fallbackActions(context, ref, form),
+        ),
+      ],
+    );
+  }
+
+  /// 失败降级手填字段（标题预填原文，热量/金额按单边开关裁剪）。
+  Widget _fallbackFields(
     BuildContext context,
     WidgetRef ref,
     CaptureFormState form,
@@ -318,34 +452,42 @@ class CapturePage extends ConsumerWidget {
           onChanged: notifier.setNote,
         ),
         if (form.errorText != null) ...[
-          const SizedBox(height: 8),
-          Text(
-            form.errorText!,
-            key: const ValueKey('capture_error_text'),
-            style: TextStyle(fontSize: 13, color: tokens.danger),
+          SizedBox(height: context.spacing.space100),
+          CaptureErrorText(
+            text: form.errorText!,
+            testKey: const ValueKey('capture_error_text'),
           ),
         ],
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            TextButton(
-              key: const ValueKey('capture_retry_parse_button'),
-              onPressed: form.submitting ? null : notifier.backToInput,
-              child: Text(
-                '重试 AI 解析',
-                style: TextStyle(fontSize: 14, color: tokens.onSurfaceMuted),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _SpringSubmitButton(
-                label: '保存',
-                enabled: form.canSubmitFallback,
-                submitting: form.submitting,
-                onPressed: () => _onAiSubmit(context, ref),
-              ),
-            ),
-          ],
+      ],
+    );
+  }
+
+  /// 失败降级动作区（钉底）：重试 AI 解析 + 保存（§7.4 可重试）。
+  Widget _fallbackActions(
+    BuildContext context,
+    WidgetRef ref,
+    CaptureFormState form,
+  ) {
+    final tokens = context.slimca;
+    final notifier = ref.read(captureControllerProvider(seed).notifier);
+    return Row(
+      children: [
+        TextButton(
+          key: const ValueKey('capture_retry_parse_button'),
+          onPressed: form.submitting ? null : notifier.backToInput,
+          child: Text(
+            '重试 AI 解析',
+            style: TextStyle(fontSize: 14, color: tokens.onSurfaceMuted),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _SpringSubmitButton(
+            label: '保存',
+            enabled: form.canSubmitFallback,
+            submitting: form.submitting,
+            onPressed: () => _onAiSubmit(context, ref),
+          ),
         ),
       ],
     );
@@ -358,7 +500,6 @@ class CapturePage extends ConsumerWidget {
     WidgetRef ref,
     CaptureFormState form,
   ) {
-    final tokens = context.slimca;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
       child: Column(
@@ -367,11 +508,10 @@ class CapturePage extends ConsumerWidget {
         children: [
           if (form.errorText != null)
             Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                form.errorText!,
-                key: const ValueKey('capture_error_text'),
-                style: TextStyle(fontSize: 13, color: tokens.danger),
+              padding: EdgeInsets.only(bottom: context.spacing.space100),
+              child: CaptureErrorText(
+                text: form.errorText!,
+                testKey: const ValueKey('capture_error_text'),
               ),
             ),
           _SpringSubmitButton(
@@ -471,7 +611,7 @@ class _CaptureHeader extends StatelessWidget {
   }
 }
 
-/// 字段分组标签。
+/// 字段分组标签（§5 排版口径：分组头 = Label Large 14/20 w500，UI-规范 §4.2）。
 class _FieldLabel extends StatelessWidget {
   const _FieldLabel(this.label);
 
@@ -481,12 +621,12 @@ class _FieldLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = context.slimca;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: EdgeInsets.only(bottom: context.spacing.space50),
       child: Text(
         label,
         style: TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
           color: tokens.onSurfaceMuted,
         ),
       ),
@@ -538,10 +678,8 @@ class _SpringSubmitButtonState extends State<_SpringSubmitButton> {
             foregroundColor: tokens.onPrimary,
             disabledBackgroundColor: tokens.surfaceMuted,
             disabledForegroundColor: tokens.onSurfaceMuted,
-            minimumSize: const Size.fromHeight(52),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
+            minimumSize: Size.fromHeight(context.sizes.rowSingleLine),
+            shape: const StadiumBorder(), // §7.1 按钮胶囊（M3 full）
           ),
           child: widget.submitting
               ? SizedBox(

@@ -33,11 +33,11 @@ import 'package:feature_sync/feature_sync.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/drift_repositories.dart';
-import '../data/savings_service.dart';
 import '../data/workout_log_service.dart' show WorkoutLogService;
 import '../notifications/flutter_local_reminder_scheduler.dart'
     show FlutterLocalReminderScheduler;
 import '../notifications/reminder_scheduler.dart' show ReminderScheduler;
+import '../settings/ai_api_setting.dart' show AiApiConfig;
 import '../settings/raw_input_setting.dart';
 import '../sync/sync_backend_factory.dart';
 import '../sync/sync_coordinator.dart';
@@ -143,15 +143,6 @@ final savingsContributionsDaoProvider =
   );
 });
 
-/// 存钱写路径服务（§3.6 目标建档+投币打卡；W13 漏斗埋点在服务内）。
-final savingsServiceProvider = Provider<SavingsService>((ref) {
-  return SavingsService(
-    goalsDao: ref.watch(savingsGoalsDaoProvider),
-    contributionsDao: ref.watch(savingsContributionsDaoProvider),
-    telemetry: ref.watch(telemetryServiceProvider),
-  );
-});
-
 /// 提醒调度器注入点（§11.2 W13 任务 3，§10.4 壳负责装配）。
 ///
 /// 缺省 = [FlutterLocalReminderScheduler]（真实通道；平台交互惰性初始化，
@@ -254,6 +245,27 @@ final telemetryServiceProvider = Provider<TelemetryService>(
 /// （§5.6⑲）装入上次的用户选择并 override。设置页写回持有器 + 落库。
 final rawInputPolicyProvider = Provider<RawInputPolicy>(
   (ref) => RawInputPolicy(),
+);
+
+/// AI 服务配置 seed（bootstrap 预载 settings 初值；null=测试/未装配缺省）。
+final aiApiConfigSeedProvider =
+    Provider<(AiApiConfig, bool)?>((ref) => null);
+
+/// AI 服务配置运行期持有（用户拍板：默认空 = 离线确定性桩，配置后 =
+/// OpenAI 兼容 adapter；「从未保存过」= dart-define 开发联调回退，
+/// 见 ai_api_setting.dart 注）。settings 本地件、永不同步——key 只存本机。
+class AiApiConfigController extends Notifier<(AiApiConfig, bool)> {
+  @override
+  (AiApiConfig, bool) build() =>
+      ref.watch(aiApiConfigSeedProvider) ?? (const AiApiConfig(), false);
+
+  /// 设置页保存后写回（captureParserProvider 响应式重装，下一次解析生效）。
+  void save((AiApiConfig, bool) value) => state = value;
+}
+
+final aiApiConfigProvider =
+    NotifierProvider<AiApiConfigController, (AiApiConfig, bool)>(
+  AiApiConfigController.new,
 );
 
 /// 同步引擎注入点（§6.2 客户端引擎、§10.4 装配）。

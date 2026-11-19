@@ -26,6 +26,8 @@ import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
 import 'package:feature_capture/feature_capture.dart'
     show captureGatewayProvider, captureParserProvider, createCaptureGateway;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -109,6 +111,9 @@ void main() {
               .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
           captureParserProvider.overrideWithValue(createCaptureParser()),
           telemetryServiceProvider.overrideWithValue(telemetry),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),
@@ -116,7 +121,8 @@ void main() {
 
     // 冷启动首帧直出（无 spinner，§2.3 步 0）：等卡片墙级联上浮播完（§9.3#1）。
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('Slimca'), findsOneWidget); // AppBar 标题：完整壳已起
+    // 完整壳已起（首页 AppBar 无产品名标题——用户拍板移除「Slimca」字样）。
+    expect(find.text('Slimca'), findsNothing);
 
     // ── 记录前：空日基线（§3.2 空态零值，非空日才有记录卡）──
     expect(find.text('记一件事，钱和卡路里一起入账'), findsOneWidget,
@@ -143,10 +149,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('capture_amount_display')), findsOneWidget);
 
-    // 数字键盘输入 ¥25.50（分存储转换，杜绝浮点 §5.1）。
-    for (final key in const ['2', '5', '.', '5', '0']) {
-      await tester.tap(find.byKey(ValueKey('capture_key_$key')));
-    }
+    // 金额滚动直输（数字键盘类型 §7.1）：enterText ¥25.50（分存储转换，
+    // 杜绝浮点 §5.1）。
+    await tester.enterText(
+      find.byKey(const ValueKey('capture_amount_display')),
+      '25.50',
+    );
     await tester.pump();
     expect(find.text('25.50'), findsOneWidget);
 

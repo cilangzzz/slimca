@@ -7,6 +7,25 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
 
+/// 有记录日色点流（§3.2 月格 Compact 色点：一点=有记录；数据源=day_summary
+/// 投影表 watch，「有记录」口径与 feature_dashboard watchRecordedDays 同款——
+/// kcal/spend/income 任一非零）。月历展开态（SlimcaCalendar）直出。
+final recordedDaysProvider = StreamProvider<Set<String>>((ref) {
+  final database = ref.watch(appDatabaseProvider);
+  return database.select(database.daySummaries).watch().map(
+        (List<db.DaySummary> rows) => rows
+            .where(
+              (db.DaySummary r) =>
+                  r.kcalIn != 0 ||
+                  r.kcalOut != 0 ||
+                  r.spendMinor != 0 ||
+                  r.incomeMinor != 0,
+            )
+            .map((db.DaySummary r) => r.date)
+            .toSet(),
+      );
+});
+
 /// 仪表盘当前选中日期状态（§3.2「一切围绕日期」）。
 ///
 /// 设计决策：

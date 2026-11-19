@@ -95,6 +95,8 @@ class LedgerManagePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final SlimcaTheme tokens = context.slimca;
+    final spacing = context.spacing;
+    final sizes = context.sizes;
     return Scaffold(
       backgroundColor: tokens.surface,
       appBar: AppBar(
@@ -102,7 +104,15 @@ class LedgerManagePage extends StatelessWidget {
         title: const Text('账本管理'),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+        // 底部留白（底栏重设计拍板（《UI-规范与重设计》§2.2 增补段））：清中央花瓣按钮凸出栏体
+        // （cradle 间隙约 34）+ 呼吸——space600+rowSingleLine+space200
+        // 组合表达（§2.2 禁裸尺寸）。
+        padding: EdgeInsets.fromLTRB(
+          spacing.space200,
+          spacing.space100,
+          spacing.space200,
+          spacing.space600 + sizes.rowSingleLine + spacing.space200,
+        ),
         children: <Widget>[
           SlimcaStaggerItem(
             index: 0,

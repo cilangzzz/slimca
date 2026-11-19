@@ -23,10 +23,10 @@ library;
 import 'dart:async';
 
 import 'package:core_db/core_db.dart' as db;
+import 'package:feature_plan/feature_plan.dart' show kDefaultBodyWeightKg;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/providers.dart';
-import '../../data/fitness_service.dart' show kDefaultBodyWeightKg;
 import '../../data/workout_log_service.dart';
 import '../../data/workout_models.dart';
 import '../../telemetry/w14_funnel_events.dart';

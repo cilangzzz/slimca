@@ -24,6 +24,7 @@ import '../plan_gateway.dart';
 import '../plan_models.dart';
 import '../plan_providers.dart';
 import '../widgets/plan_text_field.dart';
+import 'fitness_history_page.dart';
 
 /// 提交按钮测试锚点（widget 测试断言提交闭环）。
 const Key fitnessSubmitKey = ValueKey('fitness_submit');
@@ -34,8 +35,15 @@ const Key fitnessDurationFieldKey = ValueKey('fitness_duration_field');
 /// 体重输入测试锚点。
 const Key fitnessWeightFieldKey = ValueKey('fitness_weight_field');
 
+/// 估算值测试锚点（CountUp 终值文本断言用）。
+const Key fitnessEstimateKey = ValueKey('fitness_estimate');
+
 /// 会话删除按钮测试锚点（`fitness_delete_$sessionId`）。
 Key fitnessDeleteKey(String sessionId) => ValueKey('fitness_delete_$sessionId');
+
+/// 训练历史入口测试锚点（AppBar 文字按钮；自 FitnessPlanPage 迁入——
+/// 历史唯一入口挂在记录页，消灭原「二级页 AppBar 图标暗门」）。
+const Key fitnessHistoryKey = ValueKey('fitness_history');
 
 /// 健身手动记录页。
 class FitnessLogPage extends ConsumerWidget {
@@ -56,7 +64,20 @@ class FitnessLogPage extends ConsumerWidget {
         fitnessFormControllerProvider(const FitnessSeed()).notifier);
     final sessionsAsync = ref.watch(fitnessSessionsProvider(form.date));
     return Scaffold(
-      appBar: AppBar(title: const Text('健身记录')),
+      appBar: AppBar(
+        title: const Text('健身记录'),
+        actions: [
+          TextButton.icon(
+            key: fitnessHistoryKey,
+            onPressed: () => Navigator.of(context).push(
+              SlimcaSharedAxisPageRoute<void>(
+                  builder: (_) => const FitnessHistoryPage()),
+            ),
+            icon: const Icon(Icons.history, size: 18),
+            label: const Text('历史'),
+          ),
+        ],
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -160,6 +181,7 @@ class _FormCard extends StatelessWidget {
               children: [
                 for (final activity in kFitnessActivities)
                   ChoiceChip(
+                    key: ValueKey('fitness_type_${activity.id}'),
                     label: Text(activity.name),
                     selected: form.activity.id == activity.id,
                     onSelected: (_) => notifier.selectActivity(activity),
@@ -167,7 +189,7 @@ class _FormCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            Text('强度档（§3.5）',
+            Text('强度档',
                 style: TextStyle(
                     fontSize: 13, color: tokens.onSurfaceMuted)),
             const SizedBox(height: 8),
@@ -217,7 +239,7 @@ class _FormCard extends StatelessWidget {
                       PlanTextField(
                         key: fitnessWeightFieldKey,
                         initial: form.weightText,
-                        hint: '身体档案（§3.5）',
+                        hint: '身体档案',
                         keyboardType:
                             const TextInputType.numberWithOptions(decimal: true),
                         onChanged: notifier.setWeightText,
@@ -238,6 +260,7 @@ class _FormCard extends StatelessWidget {
                         fontSize: 13, color: tokens.onSurfaceMuted)),
                 const SizedBox(width: 8),
                 SlimcaCountUp(
+                  key: fitnessEstimateKey,
                   value: estimate ?? 0,
                   style: TextStyle(
                       fontSize: 28,
@@ -249,7 +272,7 @@ class _FormCard extends StatelessWidget {
                     style: TextStyle(
                         fontSize: 13, color: tokens.onSurfaceMuted)),
                 const Spacer(),
-                Text('MET 估算 ±20%（§3.5）',
+                Text('MET 估算 ±20%',
                     style: TextStyle(
                         fontSize: 12, color: tokens.onSurfaceMuted)),
               ],

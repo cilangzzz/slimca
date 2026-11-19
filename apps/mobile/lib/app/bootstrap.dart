@@ -47,6 +47,7 @@ import '../notifications/reminder_sync.dart';
 import '../photo/photo_attachment_store.dart';
 import '../photo/photo_compressor.dart';
 import '../photo/photo_image_source.dart';
+import '../settings/ai_api_setting.dart';
 import '../settings/photo_burn_setting.dart';
 import '../settings/raw_input_setting.dart';
 import '../sync/sync_backend_factory.dart';
@@ -147,6 +148,12 @@ Future<AppRuntime> bootstrap() async {
   final policy = RawInputPolicy();
   policy.enabled = await loadRawInputCloudEnabled(database);
 
+  // ── AI 服务配置（用户拍板：用户自设 API Key，默认空=离线确定性桩）：
+  // 读 settings 预载（本地件永不同步——key 只存本机，§5.6⑲/§3.7）；注入
+  // aiApiConfigProvider 初值，captureParserProvider 据此响应式装配（设置页
+  // 保存后即时生效，下一次解析即用新配置）。
+  final (aiApiConfig, aiConfigured) = await loadAiApiConfig(database);
+
   // ── W11-12 · 拍照即焚开关（§3.7/§5.6㉑，默认开=解析后即焚，§11.2 任务 3）：
   // 读 settings 装入上次用户选择；坏值回落默认开（即焚是合规缺省，损坏时取
   // 更严档，§6.1——与 raw_input 开关「坏值回落更严」同向）。
@@ -228,20 +235,37 @@ Future<AppRuntime> bootstrap() async {
       daySummaryProjectionProvider.overrideWithValue(projection),
       // W14 计划域装配（§10.4「壳负责装配」）：feature_plan 网关绑定同一
       // AppDatabase 与应用级 HLC 单例时钟（模板建档/编辑/开练/组明细写路径
-      // 经 PlanGateway——与壳层排期卡/训练中态卡共读同一批真值表，§5.5⑧⑨）。
+      // 经 PlanGateway——与壳层排期卡/训练中态卡共读同一批真值表，§5.5⑧⑨）；
+      // telemetry 注入 = W13 留存钩子漏斗跟随唯一写路径在网关侧记（§3.9）。
       planGatewayProvider.overrideWithValue(
-        createPlanGateway(db: database, clock: clock),
+        createPlanGateway(
+          db: database,
+          clock: clock,
+          telemetry: telemetry,
+        ),
       ),
-      captureParserProvider.overrideWithValue(
-        TelemetryCaptureParser(
+      captureParserProvider.overrideWith((ref) {
+        // 用户自设 AI 配置（用户拍板：默认空 = 离线确定性桩；配置后 =
+        // OpenAI 兼容 adapter）。配置保存后 aiApiConfigProvider 变更 →
+        // 本 override 重执行 → 下一次解析即用新装配（controller 逐次
+        // ref.read captureParserProvider，§10.4）。
+        final aiConfig = ref.watch(aiApiConfigProvider);
+        // 兼容注记：用户从未保存过配置（configured=false）→ 传 null 回落
+        // dart-define 开发联调口径；保存过（含保存为空）→ 以用户配置为准。
+        final (config, configured) = aiConfig;
+        return TelemetryCaptureParser(
           inner: RawInputGateCaptureParser(
-            inner: createCaptureParser(),
+            inner: createCaptureParser(
+              baseUrl: configured ? config.baseUrl : null,
+              apiKey: configured ? config.apiKey : null,
+              model: configured ? config.model : null,
+            ),
             policy: policy,
           ),
           telemetry: telemetry,
           rawInputCloud: () => policy.enabled,
-        ),
-      ),
+        );
+      }),
       // ── W11-12 拍照通道注入点（§11.2 W11-12 任务 1/3/5，§10.4 壳负责
       //    装配；测试注入 Fake 集，禁真实相机/网络）：
       // - ImageSource：image_picker 薄封装（拍照/相册双入口；端侧压缩在
@@ -278,6 +302,7 @@ Future<AppRuntime> bootstrap() async {
       // W7-8 运行期句柄注入（§10.4）。
       telemetryServiceProvider.overrideWithValue(telemetry),
       rawInputPolicyProvider.overrideWithValue(policy),
+      aiApiConfigSeedProvider.overrideWithValue((aiApiConfig, aiConfigured)),
       syncEngineProvider.overrideWithValue(engine),
       syncCoordinatorProvider.overrideWithValue(coordinator),
       // W13 提醒调度注入点（§11.2 任务 3）：真实通道适配器（测试注入 Fake）。

@@ -240,6 +240,8 @@ class _StripCell extends StatelessWidget {
               Text(
                 // 星期标签（locale 驱动 narrowWeekdays，Sunday 索引 0）
                 localizations.narrowWeekdays[day.weekday % 7],
+                maxLines: 1,
+                overflow: TextOverflow.clip,
                 style: textTheme.labelSmall?.copyWith(
                   color: tokens.onSurfaceMuted,
                 ),
@@ -247,6 +249,8 @@ class _StripCell extends StatelessWidget {
               SizedBox(height: spacing.space50),
               Text(
                 '${day.day}',
+                maxLines: 1,
+                overflow: TextOverflow.clip,
                 style: textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w600,
                   // 今天=primary 对比色（§3.3）；选中态取 onPrimaryContainer

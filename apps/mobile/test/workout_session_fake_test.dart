@@ -432,7 +432,7 @@ void main() {
       expect(harness.state!.sets.length, 5);
       expect(harness.state!.allDone, isTrue, reason: '3+2 组全部完成');
       // setUp 循环已推进 5×91s=455s；补齐到整 2400s（40 分钟）注入时钟——
-      // 时长/ kcal 断言因此可写死（MET 估算 5.0 × 60kg × 40min = 200）。
+      // 时长/ kcal 断言因此可写死（MET 估算 5.0 × 70kg × 40min = 233；身体档案缺省 70kg——与 feature_plan 网关同一常量）。
       harness.advance(const Duration(seconds: 2400 - 5 * 91)); // 训练时长 40 分钟。
 
       await harness.controller.endWorkout(save: true);
@@ -461,8 +461,8 @@ void main() {
       expect(session.source, 'plan', reason: '§5.5⑦ source 枚举');
       expect(session.planDayId, 'plan-w14-1', reason: '计划溯源（v1 暂存 plan id）');
       expect(session.durationS, 2400);
-      // MET 估算：strength 5.0 × 60kg（身体档案缺省）× 40min = 200 kcal（§3.5）。
-      expect(session.kcalBurn, 200);
+      // MET 估算：strength 5.0 × 70kg（身体档案缺省）× 40min = 233 kcal（§3.5）。
+      expect(session.kcalBurn, 233);
       expect(session.startAt, startedAtMs);
       expect(session.entryId, isNotNull, reason: '§5.5⑦ entry_id 联动');
 
@@ -480,7 +480,7 @@ void main() {
       expect(lines.length, 1);
       final burn = lines.single;
       expect(burn.type, 'burn');
-      expect(burn.amount, 200);
+      expect(burn.amount, 233);
       expect(burn.direction, 'out');
       expect(burn.confidence, isNull, reason: '人工估算行无 AI 置信度（§5.2②）');
       expect(burn.ledgerId, isNotNull, reason: 'burn 行归集内置 kcal 账本');
@@ -522,13 +522,13 @@ void main() {
         'exercise_sets': 5,
       });
 
-      // 投影联动（§5.6）：当日 kcal_out 重算 = 200。
+      // 投影联动（§5.6）：当日 kcal_out 重算 = 233。
       final summary = await (database.select(database.daySummaries)
             ..where((t) => t.date.equals('2026-11-17')))
           .getSingleOrNull();
       expect(summary, isNotNull);
-      expect(summary!.kcalOut, 200);
-      expect(summary.netKcal, -200);
+      expect(summary!.kcalOut, 233);
+      expect(summary.netKcal, -233);
     });
 
     test('放弃训练：off + cancel + 零落库 + 无 workout_completed', () async {

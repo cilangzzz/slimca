@@ -39,6 +39,9 @@ const Key photoCaptureSwitchTextKey = ValueKey('photo_capture_switch_text');
 /// 「返回重拍」按钮测试锚点（原件保留语义，§11.2 任务 4）。
 const Key photoCaptureRetakeKey = ValueKey('photo_capture_retake');
 
+/// 拍摄取景引导卡测试锚点（整卡可点发起拍照）。
+const Key photoCaptureZoneKey = ValueKey('photo_capture_zone');
+
 /// 拍通道面板：拍照/相册 → 识别/端侧粗估 → 确认落库（source=photo，§5.2①）。
 class PhotoCapturePanel extends ConsumerStatefulWidget {
   const PhotoCapturePanel({
@@ -79,22 +82,43 @@ class _PhotoCapturePanelState extends ConsumerState<PhotoCapturePanel> {
         body.addAll(_inputStage(context, form, notifier));
       case CaptureAiStage.parsing:
         // 拍照处理中呼吸态（分段文案 压缩中…→识别中…/端侧粗估中…，§9.4/
-        // §11.2；文本解析同阶段沿用默认文案）。
-        body.add(Padding(
-          padding: const EdgeInsets.symmetric(vertical: 24),
-          child: CaptureParsingState(
-            label: form?.photoProcessingLabel ?? '拍照识别中…',
+        // §11.2；文本解析同阶段沿用默认文案）——填充式居中。
+        body.add(Expanded(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: CaptureParsingState(
+                label: form?.photoProcessingLabel ?? '拍照识别中…',
+              ),
+            ),
           ),
         ));
       case CaptureAiStage.confirm:
         if (form != null) {
-          // 确认卡复用（份量滑杆/置信度点/count-up，§9.3#4）；提交走共享
-          // 控制器 submitPendingCapture——即焚/漏斗由控制器收口（§11.2）。
-          body.add(CaptureConfirmCard(
-            form: form,
-            controller: notifier,
-            onConfirm: () => _submitPhoto(form, notifier),
-          ));
+          // 统一抽屉高度口径：卡面滚动 + 动作页脚钉底（确认落库 CTA 恒可见，
+          // §2.3 步骤 5）；提交走共享控制器 submitPendingCapture——即焚/漏斗
+          // 由控制器收口（§11.2）。
+          return Material(
+            color: tokens.surface,
+            child: SafeArea(
+              top: false,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const _PhotoHeader(),
+                  Flexible(
+                    child: CaptureConfirmStage(
+                      form: form,
+                      controller: notifier,
+                      onConfirm: () => _submitPhoto(form, notifier),
+                      scrollPadding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
         }
       case CaptureAiStage.manualFallback:
         body.addAll(_fallbackStage(context, form, notifier));
@@ -105,16 +129,17 @@ class _PhotoCapturePanelState extends ConsumerState<PhotoCapturePanel> {
       child: SafeArea(
         top: false,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const _PhotoHeader(),
+            // 统一高度框内填充式布局：取景引导卡扩展吃满、主操作贴底；
+            // 降级簇贴底（大厂输入面板口径，无空白死角）。
             Flexible(
-              child: SingleChildScrollView(
+              child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisAlignment: MainAxisAlignment.end,
                   children: body,
                 ),
               ),
@@ -152,17 +177,58 @@ class _PhotoCapturePanelState extends ConsumerState<PhotoCapturePanel> {
       ];
     }
     return [
-      // 拍照/相册双入口 + §3.7 口径隐私提示（文案随 raw_input 开关切换）。
+      // 拍摄取景引导卡（composer 同款填充面：整卡可点=大命中目标 ≥48）——
+      // 空白被取景面吸收；卡面不持有任何拍照逻辑（意图仍收口控制器）。
+      Expanded(
+        child: GestureDetector(
+          key: photoCaptureZoneKey,
+          onTap: () => notifier.startPhotoCapture(fromCamera: true),
+          child: Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: tokens.surfaceCard,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: tokens.outline),
+            ),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.photo_camera_outlined,
+                      size: 40, color: tokens.onSurfaceMuted),
+                  const SizedBox(height: 12),
+                  Text(
+                    '拍一张餐食或小票',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: tokens.onSurface),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '自动识别热量与金额（§3.3）',
+                    style: TextStyle(
+                        fontSize: 12, color: tokens.onSurfaceMuted),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      const SizedBox(height: 14),
+      // 拍照单一入口（全宽主按钮）+ §3.7 口径隐私提示（文案随 raw_input
+      // 开关切换）；相册选择不再并列露出（§10.4 单一入口纪律）。
       CapturePhotoEntry(
+        showGalleryEntry: false,
         onCamera: () => notifier.startPhotoCapture(fromCamera: true),
         onGallery: () => notifier.startPhotoCapture(fromCamera: false),
       ),
       if (form?.errorText != null) ...[
         const SizedBox(height: 8),
-        Text(
-          form!.errorText!,
-          key: const ValueKey('photo_capture_error'),
-          style: TextStyle(fontSize: 13, color: tokens.danger),
+        CaptureErrorText(
+          text: form!.errorText!,
+          testKey: const ValueKey('photo_capture_error'),
         ),
       ],
     ];
@@ -218,10 +284,8 @@ class _PhotoCapturePanelState extends ConsumerState<PhotoCapturePanel> {
               style: FilledButton.styleFrom(
                 backgroundColor: tokens.primary,
                 foregroundColor: tokens.onPrimary,
-                minimumSize: const Size.fromHeight(48),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
+                minimumSize: Size.fromHeight(context.sizes.minTouchTarget),
+                shape: const StadiumBorder(), // §7.1 按钮胶囊（M3 full）
               ),
               child: const Text(
                 '返回重拍',

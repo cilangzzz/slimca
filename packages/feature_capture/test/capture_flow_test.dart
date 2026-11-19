@@ -10,7 +10,6 @@
 ///    断言 entry(mixed)+calorie/money 行+food_items+ai_parses+corrections
 ///    （AI 初值 vs 用户确认差异，source=ai_corrected，§5.6⑮）；
 /// 5. 失败降级（§7.4）：结构化失败 → 自动手填表单、原文保留、无 AI 痕迹；
-/// 6. 最近 chip 复记（§2.4-1）：点选整卡预填、日期刷新到今天、无 AI 审计；
 /// 7. input_hash 缓存（§3.3/§5.6⑭）：相同输入第二次解析直接复用 ai_parses 行；
 /// 8. 仅记热量（kcal-only）：确认卡只产 calorie 行（§3.3 单边开关）。
 ///
@@ -235,11 +234,13 @@ Future<String> _waitForEntryCount(
 
 Future<void> _typeAmount(
   WidgetTester tester,
-  List<String> keys,
+  String text,
 ) async {
-  for (final key in keys) {
-    await tester.tap(find.byKey(ValueKey('capture_key_$key')));
-  }
+  // 金额改滚动直输字段（数字键盘类型 §7.3）：enterText 整串写入。
+  await tester.enterText(
+    find.byKey(const ValueKey('capture_amount_display')),
+    text,
+  );
   await tester.pump();
 }
 
@@ -264,7 +265,7 @@ void main() {
       expect(find.text('工资'), findsNothing);
 
       // 数字键盘输入 ¥18.50（分存储转换，杜绝浮点 §5.1）。
-      await _typeAmount(tester, ['1', '8', '.', '5', '0']);
+      await _typeAmount(tester, '18.50');
       expect(find.text('18.50'), findsOneWidget);
 
       // 选分类（§5.4⑤ 内置分类，color_token 引用语义 token 名 §8.2）。
@@ -359,12 +360,8 @@ void main() {
       expect(find.byKey(const ValueKey('capture_original_amount')),
           findsOneWidget, reason: '编辑模式展示原金额对照（§3.4）');
 
-      // 修改金额：退格清空「18.50」（5 步）后输入 20 → ¥20.00。
-      for (var i = 0; i < 5; i++) {
-        await tester.tap(find.byKey(const ValueKey('capture_key_backspace')));
-      }
-      await tester.pump();
-      await _typeAmount(tester, ['2', '0']);
+      // 修改金额：字段直输覆盖「18.50」→ 20。
+      await _typeAmount(tester, '20');
       expect(find.text('20'), findsOneWidget);
 
       await tester.tap(find.byKey(captureSubmitKey));
@@ -431,14 +428,14 @@ void main() {
 
       // 默认「钱+热量」：AI 文本输入区出现，数字键盘不出现（W3-4 双解析默认档）。
       expect(find.byKey(captureAiInputKey), findsOneWidget);
-      expect(find.byKey(const ValueKey('capture_key_1')), findsNothing);
+      expect(find.byKey(const ValueKey('capture_amount_display')), findsNothing);
 
       // 「仅记热量」：仍是 AI 输入区（kcal-only 提示，§3.3），键盘不出现。
       await tester.tap(find.text('仅记热量'));
       await tester.pump();
       expect(find.byKey(captureAiInputKey), findsOneWidget);
       expect(find.text('如：喝了一杯黑咖啡（仅解析热量，§3.3）'), findsOneWidget);
-      expect(find.byKey(const ValueKey('capture_key_1')), findsNothing);
+      expect(find.byKey(const ValueKey('capture_amount_display')), findsNothing);
 
       // 「仅记钱」：W2 手动表单回归；空金额保存禁用（canSubmit 金额>0，§5.1）。
       await tester.tap(find.text('仅记钱'));
@@ -451,7 +448,7 @@ void main() {
       );
 
       // 键入金额后保存可用（键盘输入与单边开关状态互不干扰，§3.3）。
-      await _typeAmount(tester, ['1', '8']);
+      await _typeAmount(tester, '18');
       expect(find.text('18'), findsOneWidget);
       expect(
         tester.widget<FilledButton>(find.byKey(captureSubmitKey)).onPressed,
@@ -668,90 +665,6 @@ void main() {
       // 失败路径不留 AI 痕迹：ai_parses 无行（坏输出不留痕，§7.4）、无审计行。
       expect((await harness.db.select(harness.db.aiParses).get()), isEmpty);
       expect((await harness.db.select(harness.db.corrections).get()), isEmpty);
-    },
-  );
-
-  testWidgets(
-    'W3-4 最近 chip 复记（§2.4-1）：点选整卡预填、日期刷新到今天、无 AI 初值审计',
-    (tester) async {
-      final harness = _Harness();
-      if (!await harness.init()) return;
-      addTearDown(harness.close);
-
-      // 经网关直接落一条种子记录（标题+热量+金额，2026-11-10 回记）。
-      final ledger = await harness.gateway.ensureDefaultLedger();
-      final breakfastId =
-          await harness.presetCategoryId('餐饮-早餐', kind: 'expense');
-      final seedEntryId = await harness.gateway.submitAiCapture(
-        CaptureAiSubmitRequest(
-          date: '2026-11-10',
-          tzOffsetMin: 480,
-          title: '牛肉面加蛋',
-          source: dom.EntrySource.text,
-          kcal: 550,
-          amountMinor: 1850,
-          moneyDirection: dom.LineDirection.outcome,
-          ledgerId: ledger.id,
-          categoryId: breakfastId,
-          currency: 'CNY',
-        ),
-      );
-
-      final parser = FakeParser(_dualParseResult());
-      await _pumpCapture(tester, harness, parser: parser);
-
-      // 最近 chip 出现（§2.4-1 最近记录横滑）→ 点选整卡预填。
-      await _pumpUntilFound(
-          tester, find.byKey(ValueKey('capture_recent_chip_$seedEntryId')));
-      expect(find.text('牛肉面加蛋'), findsOneWidget, reason: 'chip 展示原标题');
-      await tester.tap(find.byKey(ValueKey('capture_recent_chip_$seedEntryId')));
-
-      await _pumpUntilFound(tester, find.byKey(captureConfirmCardKey));
-      await tester.pump(const Duration(milliseconds: 900));
-      expect(find.text('牛肉面加蛋'), findsOneWidget, reason: '标题预填');
-      expect(find.text('550'), findsOneWidget, reason: '热量预填原值');
-      expect(find.text('¥18.50'), findsOneWidget, reason: '金额预填原值');
-      expect(find.text('餐饮-早餐'), findsOneWidget, reason: '分类预填原分类');
-      expect(find.text(dom.formatCalendarDay(DateTime.now())), findsOneWidget,
-          reason: '§2.4-1 复记日期刷新到今天');
-
-      // 确认落库（source=chip）。
-      await tester.tap(find.byKey(captureConfirmSubmitKey));
-      await tester.pump();
-      await _waitForEntryCount(tester, harness, 2);
-
-      final rows = await harness.db.select(harness.db.entries).get();
-      final newEntry =
-          rows.singleWhere((r) => r.id != seedEntryId, orElse: () => throw StateError('复记未生成新事件'));
-      expect(newEntry.source, 'chip', reason: '§5.2① source：复记');
-      expect(newEntry.kind, 'mixed');
-      expect(newEntry.aiParseId, isNull, reason: '复记无 AI 溯源（§5.2①）');
-      expect(newEntry.title, '牛肉面加蛋');
-      expect(newEntry.date, dom.formatCalendarDay(DateTime.now()),
-          reason: '§2.4-1 日期刷新到今天');
-
-      final lines = await (harness.db.select(harness.db.entryLines)
-            ..where((t) => t.entryId.equals(newEntry.id)))
-          .get();
-      expect(lines, hasLength(2));
-      final kcalLine = lines.singleWhere((l) => l.type == 'calorie');
-      final moneyLine = lines.singleWhere((l) => l.type == 'money');
-      expect(kcalLine.amount, 550);
-      expect(kcalLine.confidence, isNull, reason: '复记行人工语义（§5.2②）');
-      expect(moneyLine.amount, 1850);
-      expect(moneyLine.categoryId, breakfastId);
-      expect(moneyLine.ledgerId, ledger.id);
-
-      // 复记路径无 AI 审计（初值快照为 null）且无 ai_parses。
-      final auditRows = await (harness.db.select(harness.db.corrections)
-            ..where((t) => t.entryId.equals(newEntry.id)))
-          .get();
-      expect(
-        auditRows,
-        isEmpty,
-        reason: '§5.6⑮ 复记无「AI 初值 vs 确认」差异',
-      );
-      expect((await harness.db.select(harness.db.aiParses).get()), isEmpty);
     },
   );
 

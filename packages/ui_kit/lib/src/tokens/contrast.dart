@@ -165,6 +165,27 @@ final List<SlimcaAaPairSpec> kSlimcaAaPairSpecs = <SlimcaAaPairSpec>[
     bg: (t) => t.surfaceCard,
     apply: (t, c) => t.copyWith(danger: c),
   ),
+  // 底栏重设计拍板（定型条目《UI-规范与重设计》§5 #14、§2.2 增补段）：
+  // 中央按钮由「独立突出元素（FAB 可豁免）」转入凹槽承接容器语境，其与
+  // 栏面（surfaceCard）按 M3 color-contrast 容器类 3:1 校验；outline 对
+  // 守卫卡面语境的描边通用色（输入框/分隔线），并为底栏 P2 描边兜底
+  // （Material shape side）预留色源——描边当前未接线，仅口径预留。
+  // 放在 onPrimary/primary 锚点对之前——primary 若被降级，onPrimary 随新
+  // primary 复检（顺序敏感，勿后移）。
+  SlimcaAaPairSpec(
+    label: '主色钮面 / 底栏卡面',
+    threshold: kAaUiContrast,
+    fg: (t) => t.primary,
+    bg: (t) => t.surfaceCard,
+    apply: (t, c) => t.copyWith(primary: c),
+  ),
+  SlimcaAaPairSpec(
+    label: '底栏描边 / 底栏卡面',
+    threshold: kAaUiContrast,
+    fg: (t) => t.outline,
+    bg: (t) => t.surfaceCard,
+    apply: (t, c) => t.copyWith(outline: c),
+  ),
   SlimcaAaPairSpec(
     label: '主色按钮前景 / 主色',
     threshold: kAaUiContrast,

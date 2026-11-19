@@ -27,6 +27,8 @@ import 'package:drift/drift.dart'
 import 'package:drift/native.dart';
 import 'package:feature_capture/feature_capture.dart'
     show captureGatewayProvider, captureParserProvider, createCaptureGateway;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -147,6 +149,9 @@ void main() {
               .overrideWithValue(createCaptureGateway(db: database, clock: clock)),
           captureParserProvider.overrideWithValue(createCaptureParser()),
           telemetryServiceProvider.overrideWithValue(telemetry),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),
@@ -212,9 +217,11 @@ void main() {
     // 多账本选择器：新账本 chip 在位（§5.4④ 账本选项）。
     expect(find.text('差旅账本'), findsWidgets,
         reason: '录入页账本选择器接多账本（CaptureLedgerPicker 选项）');
-    for (final key in const ['1', '2', '.', '3', '4']) {
-      await tester.tap(find.byKey(ValueKey('capture_key_$key')));
-    }
+    // 金额滚动直输（数字键盘类型 §7.3）：enterText 12.34。
+    await tester.enterText(
+      find.byKey(const ValueKey('capture_amount_display')),
+      '12.34',
+    );
     await tester.pump();
     await tester.enterText(
       find.byWidgetPredicate(
@@ -274,9 +281,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('仅记钱'));
     await tester.pumpAndSettle();
-    for (final key in const ['5']) {
-      await tester.tap(find.byKey(ValueKey('capture_key_$key')));
-    }
+    // 金额滚动直输：enterText 5。
+    await tester.enterText(
+      find.byKey(const ValueKey('capture_amount_display')),
+      '5',
+    );
     await tester.pump();
     await tester.enterText(
       find.byWidgetPredicate(

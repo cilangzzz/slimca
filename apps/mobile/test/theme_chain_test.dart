@@ -25,6 +25,8 @@ import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
 import 'package:feature_capture/feature_capture.dart'
     show captureGatewayProvider, captureParserProvider, createCaptureGateway;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -130,6 +132,9 @@ Future<db.AppDatabase?> _pumpApp(
         captureParserProvider.overrideWithValue(createCaptureParser()),
         telemetryServiceProvider.overrideWithValue(recording),
         corePaletteLoaderProvider.overrideWithValue(fakeLoader.asLoader()),
+        planGatewayProvider.overrideWithValue(
+          createPlanGateway(db: database, clock: clock),
+        ),
       ],
       child: const SlimcaApp(),
     ),

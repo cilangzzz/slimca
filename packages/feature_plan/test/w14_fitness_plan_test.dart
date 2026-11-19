@@ -1,10 +1,13 @@
-/// W14 主线 widget 测试（§11.2 W14「健身计划（留存钩子）：模板排期+组间计时
-/// +组明细」、§3.5 健身记录与热量收支、§5.5⑦⑧⑨、§5.6、§6.2）。
+/// W14 主线 widget 测试（§11.2 W14「健身计划（留存钩子）：模板排期+组明细」、
+/// §3.5 健身记录与热量收支、§5.5⑦⑧⑨、§5.6、§6.2）。
 ///
 /// 数据前提：内存真库（NativeDatabase.memory，§10.1 测试口径「真库 + Fake」，
-/// 禁真实网络/平台通道）+ **注入 HlcClock 墙钟**（Fake 时钟：测试推进虚拟墙钟
-/// 45 分钟 → 汇总时长/ MET 估算确定性）+ **注入休息心跳源**（Fake ticker：
-/// 手动 StreamController，禁真实计时器）+ 完成反馈 Spy（音/震动接口留验）。
+/// 禁真实网络/平台通道）+ **注入 HlcClock 墙钟**（Fake 时钟：测试推进虚拟
+/// 墙钟 45 分钟 → 汇总时长/MET 估算确定性）。
+///
+/// IA 重设计口径：开练引擎在壳层 WorkoutRunnerPage（注入时钟/组间计时/锁屏
+/// 通知链路由壳层 e2e 覆盖），开练写路径复用本网关三方法——本文件经网关
+/// 直驱覆盖同一批写路径语义；UI 层覆盖模板建档/编辑/删除与周排期日历。
 ///
 /// 主线验收（任务口径）：
 /// 1. 建模板（名称+动作列表+排期掩码）→ fitness_plans 落库 + outbox 入队；
@@ -13,8 +16,6 @@
 /// 3. 开练 → fitness_sessions 行（type=template_instance/source=plan/
 ///    start_at 真值）；
 /// 4. 完成 3 组 → exercise_sets 3 行（组序/次数/重量/休息秒/完成时刻）；
-///    第 1、2 组后组间计时器启动（rest_s=90 从模板读）——Fake 心跳计满触发
-///    完成反馈 1 次 + 面板自动收起；第 2 次休息走「跳过」；第 3 组后无休息；
 /// 5. 完成训练 → 会话汇总（时长=注入墙钟 45 分钟、kcal=MET 估算确定性）+
 ///    entries(kind=fitness)+entry_lines(type=burn) 联动 + 投影 kcal_out 即时
 ///    重算 + 五表 outbox 同事务入队（§6.2）。
@@ -23,7 +24,6 @@
 /// （Windows 桌面常见，§10.1 测试口径）。
 library;
 
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:core_db/core_db.dart' as cdb;
@@ -46,35 +46,6 @@ bool _isSqliteLibraryMissing(Object error) {
 
 /// §6.3 定宽 HLC 编码：13 位毫秒:6 位计数器:12 位 hex。
 final RegExp _hlcPattern = RegExp(r'^\d{13}:\d{6}:[0-9A-Fa-f]{12}$');
-
-/// Fake 休息心跳源（§11.2 W14 可测性注入：手动 StreamController，禁真实
-/// 计时器——每次 start() 取一条新流，测试逐枚触发心跳）。
-class _FakeRestTicker {
-  final List<StreamController<void>> controllers = <StreamController<void>>[];
-
-  RestTickerFactory factory() => () {
-        final controller = StreamController<void>();
-        controllers.add(controller);
-        return controller.stream;
-      };
-
-  /// 向最近一次 start() 取的心跳流注入 [ticks] 枚秒级心跳（一次注入、
-  /// 顺序送达——倒计时逐秒递减到 0 后触发完成反馈并收起）。
-  void emitLast(int ticks) {
-    final controller = controllers.last;
-    for (var i = 0; i < ticks; i++) {
-      controller.add(null);
-    }
-  }
-}
-
-/// 完成反馈 Spy（§11.2 W14「完成音/震动留接口」的注入点验证）。
-class _FeedbackSpy implements RestFeedback {
-  int restCompleteCount = 0;
-
-  @override
-  void onRestComplete() => restCompleteCount++;
-}
 
 /// 测试夹具：内存真库 + 注入 HlcClock（可推进的 Fake 墙钟）+ 计划域网关。
 class _Harness {
@@ -120,21 +91,18 @@ class _Harness {
   }
 }
 
-/// 泵计划页（ProviderScope 覆盖注入网关 + Fake 心跳 + 反馈 Spy）。
-Future<({WidgetTester tester, _FakeRestTicker ticker, _FeedbackSpy feedback})>
-    _pumpPlanPage(WidgetTester tester, _Harness harness) async {
+/// 泵计划页（ProviderScope 覆盖注入网关）。开练链由网关直驱（IA 重设计后
+/// 开练引擎在壳层 WorkoutRunnerPage——注入时钟/休息计时链路由壳层 e2e 覆盖，
+/// 本包测试覆盖模板管理与网关写路径语义）。
+Future<void> _pumpPlanPage(WidgetTester tester, _Harness harness) async {
   tester.view.physicalSize = const Size(900, 1800);
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.reset);
 
-  final ticker = _FakeRestTicker();
-  final feedback = _FeedbackSpy();
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         planGatewayProvider.overrideWithValue(harness.gateway),
-        restTickerFactoryProvider.overrideWithValue(ticker.factory()),
-        restFeedbackProvider.overrideWithValue(feedback),
       ],
       child: MaterialApp(
         theme: buildTheme(brightness: Brightness.light),
@@ -143,7 +111,6 @@ Future<({WidgetTester tester, _FakeRestTicker ticker, _FeedbackSpy feedback})>
     ),
   );
   await _pumpUntilFound(tester, find.text('开始你的第一个健身计划'));
-  return (tester: tester, ticker: ticker, feedback: feedback);
 }
 
 Future<void> _pumpUntilFound(WidgetTester tester, Finder finder) async {
@@ -223,19 +190,10 @@ Future<cdb.DaySummary?> _summaryFor(_Harness harness, String date) async {
   return null;
 }
 
-/// 读组间计时器面板剩余秒（AnimatedSwitcher.child=剩余秒 Text）。
-int _restRemaining(WidgetTester tester) {
-  final switcher =
-      tester.widget<AnimatedSwitcher>(find.byKey(restTimerRemainKey));
-  final text = switcher.child! as Text;
-  return int.parse(text.data!);
-}
-
 void main() {
   testWidgets(
-    'W14 主线：建模板→日历高亮→开练→完成 3 组（Fake 计时触发/跳过）→'
-    '汇总落 session+burn 行+投影+五表 outbox（§11.2 W14 / §3.5 / §5.5⑦⑧⑨ /'
-    ' §5.6 / §6.2）',
+    'W14 主线：建模板→日历高亮→网关开练→逐组落库→汇总 session+burn 行+'
+    '投影+五表 outbox（§11.2 W14 / §3.5 / §5.5⑦⑧⑨ / §5.6 / §6.2）',
     (tester) async {
       final harness = _Harness();
       if (!await harness.init()) return;
@@ -249,9 +207,7 @@ void main() {
       final otherIdx = (todayIdx + 1) % 7;
       final idleIdx = (todayIdx + 3) % 7;
 
-      final env = await _pumpPlanPage(tester, harness);
-      final fakeTicker = env.ticker;
-      final feedbackSpy = env.feedback;
+      await _pumpPlanPage(tester, harness);
 
       // ① 新建计划抽屉：名称 + 周排期（今日、相邻日）+ 动作（卧推 3组×10次
       //    40kg 休 90s）（§5.5⑧ 模板字段全量）。
@@ -314,15 +270,15 @@ void main() {
       expect(chipColor(otherIdx), tokens.kcalOut, reason: '排期日高亮');
       expect(chipColor(idleIdx), tokens.surfaceMuted, reason: '非排期日低亮');
       expect(find.text('今'), findsOneWidget, reason: '今日角标');
-      expect(find.text('今日已排 · 可开练'), findsOneWidget);
+      expect(find.text('今日已排'), findsOneWidget);
 
-      // ④ 开练（§11.2 W14 任务 2）：fitness_sessions 行
+      // ④ 开练（§11.2 W14 任务 2，经网关直驱——IA 重设计后开练引擎在壳层
+      //    WorkoutRunnerPage，写路径复用本网关）：fitness_sessions 行
       //    type=template_instance/source=plan/start_at 真值。
-      await tester.tap(find.byKey(fitnessPlanStartKey(plan.id)));
-      await _pumpUntilFound(tester, find.byKey(fitnessWorkoutCompleteKey));
-      await _pumpUntilDb(tester, () async => (await _allSessions(harness))
-          .any((s) => s.planDayId == plan.id));
-      final session0 = (await _allSessions(harness)).single;
+      final session0 = await harness.gateway.startWorkoutSession(
+        planId: plan.id,
+        date: today,
+      );
       expect(session0.type, kFitnessSessionTypeTemplateInstance);
       expect(session0.source, kFitnessSessionSourcePlan);
       expect(session0.startAt, isNotNull, reason: '开练时刻真值（§5.5⑦）');
@@ -331,11 +287,18 @@ void main() {
       expect(session0.entryId, isNull, reason: 'entry 随完成训练联动');
       expect(session0.date, today);
       expect(session0.tzOffsetMin, now.timeZoneOffset.inMinutes);
+      expect(session0.planDayId, plan.id);
 
-      // ⑤ 完成 3 组（§11.2 W14 任务 3）：目标预填直接完成 →
-      //    exercise_sets 逐行落库（组序/次数/重量/休息秒/完成时刻）。
+      // ⑤ 逐组落库（§11.2 W14 任务 3：每完成一组落 exercise_sets，父行先于
+      //    子行、组序/次数/重量/休息秒/完成时刻全量）。
       for (var i = 1; i <= 3; i++) {
-        await tester.tap(find.byKey(fitnessWorkoutCompleteKey));
+        await harness.gateway.logExerciseSet(
+          sessionId: session0.id,
+          exerciseRef: '卧推',
+          reps: 10,
+          weightKgX10: 400,
+          restS: 90,
+        );
         await _pumpUntilDb(
           tester,
           () async => (await _allSets(harness)).length == i,
@@ -345,47 +308,20 @@ void main() {
         final last = sets.last;
         expect(last.sessionId, session0.id);
         expect(last.exerciseRef, '卧推');
-        expect(last.reps, 10, reason: '空输入沿用模板目标次数');
-        expect(last.weightKgX10, 400, reason: '空输入沿用模板目标重量');
+        expect(last.reps, 10, reason: '沿用模板目标次数');
+        expect(last.weightKgX10, 400, reason: '沿用模板目标重量（§5.5⑨）');
         expect(last.restS, 90, reason: 'rest_s 从模板读（§5.5⑨）');
         expect(last.sort, i, reason: '会话内全局组序');
         expect(last.doneAt, isNotNull, reason: '完成标记=done_at（§5.5⑨）');
         expect(last.deletedAt, isNull);
         expect(_hlcPattern.hasMatch(last.hlc), isTrue);
-        if (i == 3) {
-          // 组间休息（§3.5）：第 3 组收尾无下一组 → 不再计时。
-          await tester.pump(const Duration(milliseconds: 100));
-          expect(find.byKey(restTimerPanelKey), findsNothing,
-              reason: '全部完成不再计时');
-          break;
-        }
-        // 组间计时器随完成一组启动（rest 秒数从模板读，§5.5⑧ rest_s）。
-        await _pumpUntilFound(tester, find.byKey(restTimerPanelKey));
-        expect(_restRemaining(tester), 90, reason: '大数字倒计时=模板 rest_s');
-        // 注入心跳未触发前不递减（禁真实计时器口径：pump 秒数不走表）。
-        await tester.pump(const Duration(seconds: 3));
-        expect(_restRemaining(tester), 90);
-        if (i == 1) {
-          // Fake 心跳计满（§11.2 W14 可测性）：90 枚秒级心跳 → 完成反馈
-          // 恰 1 次 + 面板自动收起（完成音/震动留接口验证）。
-          fakeTicker.emitLast(90);
-          await tester.pump();
-          expect(feedbackSpy.restCompleteCount, 1);
-          await _pumpUntilGone(tester, find.byKey(restTimerPanelKey));
-        } else {
-          // 第 2 次休息走「跳过」：直接收起、不触发完成反馈。
-          await tester.tap(find.byKey(restTimerSkipKey));
-          await _pumpUntilGone(tester, find.byKey(restTimerPanelKey));
-          expect(feedbackSpy.restCompleteCount, 1);
-        }
       }
-      expect(fakeTicker.controllers.length, 2,
-          reason: '心跳流恰按每次休息（组 1/2 后）各取一条（单订阅工厂）');
 
       // ⑥ 完成训练（§11.2 W14 任务 3 汇总）：推进注入墙钟 45 分钟 →
       //    duration=2700s、kcal=MET 估算确定性（§3.5 公式复用）。
       harness.fakeNowMs += 45 * 60 * 1000;
-      await tester.tap(find.byKey(fitnessWorkoutFinishKey));
+      await harness.gateway
+          .finishWorkoutSession(sessionId: session0.id, weightKg: 70);
       await _pumpUntilDb(
         tester,
         () async => (await _allSessions(harness)).single.entryId != null,

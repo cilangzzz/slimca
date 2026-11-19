@@ -1,26 +1,27 @@
-/// 计划 Tab 真页（§4.2「待办 / 健身 / 存钱三卡」、§11.2 W13 主线
-/// 「待办完整版（RRULE+提醒）+ 存钱目标」）。
+/// 计划 Tab 真页（计划域 IA 重设计定稿：今日为纲——默认页只回答
+/// 「今天要做/要练/要存什么」，管理面下沉域主页）。
 ///
-/// 数据源（plan_state.dart，全部 reactive stream、§6.1 原则 3）：
-/// - 待办完整版：planTodosProvider（§5.5⑩ todos）+ todoDaoProvider 增改——
-///   勾选经 setDone（done_at 只前进合并 §6.5）；W13 起新增支持重复
-///   （repeat_rule=RRULE RFC5545，锚点由 TodoDao 缺省回填计划日）与提醒
-///   （remind_at，本地通知调度经 ReminderSyncCoordinator 按展开实例落），
-///   重复建档记 todo_recurrence_created 漏斗（§11.2 W13 任务 4）；
-/// - 健身：planSessionsProvider（§5.5⑦ fitness_sessions）+「记录健身」推入
-///   /plan/fitness 子路由（§4.3）；会话的 burn 行经 dashboard 流聚合进净热量
-///   （§3.5「消耗进运动条与净热量」）；
-/// - 存钱目标（§3.6 P1 留存钩子，§11.2 W13）：planSavingsGoalsProvider
-///   （打卡中目标 + Σ贡献进度）直驱——新建目标/投币打卡经
-///   [SavingsService]（写路径同事务联动投影 + savings_goal_created/coin_in
-///   漏斗）。
+/// 版面（三层 IA 的 L0，每个目的地全局恰一条到达路径）：
+/// 1. 今日待办卡：当日实例行（勾选就地完成，重复待办按 anchor 查询时展开、
+///    不预生成行）+ 快速添加（轻层：只产当日无重复待办；重复/提醒走编辑
+///    抽屉重层）+ 收集箱尾行（唯一收集箱入口 → /plan/todos）；
+/// 2. 今日健身卡（四态互斥，一卡一叙事）：训练中横幅 > 今日排期行（全 App
+///    唯一开练入口，壳层引擎）> 已练摘要 > 空态；卡尾「健身计划」（模板
+///    管理 → /plan/plans）与「记录健身」（包版健身记录页）；
+/// 3. 今日存钱卡：进行中目标行（行内一键投币 = SavingsCheckInButton，幂等
+///    置灰；行点进目标详情）+「存钱目标」尾行（列表/新建 → /plan/savings）。
 ///
-/// 布局纪律与仪表盘一致（§3.2 卡片墙：surfaceCard 卡容器 + 语义 token，
-/// §8.2 组件层禁裸色值）。
+/// 数据源：读侧全部 reactive stream——待办实例/收集箱/存钱目标视图走
+/// feature_plan providers（planGatewayProvider，§10.4 装配）；当日会话/
+/// 排期走 plan_state（§3.2 一切围绕日期，随仪表盘选中日）；写路径纪律：
+/// 待办轻层（快速添加/勾选）走壳层 TodoDao（outbox 同事务已验证），重层
+/// （编辑抽屉/投币/会话）走 PlanGateway 唯一写路径，W13 留存钩子漏斗在
+/// 网关侧记（§3.9）。
 library;
 
 import 'package:core_db/core_db.dart' as db;
 import 'package:core_domain/core_domain.dart' show formatCalendarDay;
+import 'package:feature_plan/feature_plan.dart' as fp;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -28,9 +29,6 @@ import 'package:ui_kit/ui_kit.dart';
 
 import '../../app/providers.dart';
 import '../../common/format.dart';
-import '../../data/fitness_service.dart';
-import '../../data/savings_service.dart';
-import '../../telemetry/w13_funnel_events.dart';
 import '../dashboard/dashboard_state.dart';
 import '../workout/workout_session_controller.dart';
 import 'plan_state.dart';
@@ -41,45 +39,37 @@ const Key planTodoInputKey = ValueKey('plan_todo_input');
 /// 待办添加按钮测试锚点。
 const Key planTodoAddKey = ValueKey('plan_todo_add');
 
+/// 待办「详细」按钮测试锚点（轻/重两层：进编辑抽屉设重复/提醒）。
+const Key planTodoAdvancedKey = ValueKey('plan_todo_advanced');
+
+/// 待办勾选框测试锚点（`plan_todo_check_$todoId`）。
+Key planTodoCheckKey(String todoId) => ValueKey('plan_todo_check_$todoId');
+
+/// 收集箱尾行测试锚点。
+const Key planInboxTileKey = ValueKey('plan_inbox_tile');
+
 /// 「记录健身」按钮测试锚点。
 const Key planFitnessAddKey = ValueKey('plan_fitness_add');
 
-/// 「新建目标」按钮测试锚点。
-const Key planSavingsCreateKey = ValueKey('plan_savings_create');
-
-/// 健身计划卡测试锚点（§11.2 W14 任务 1「计划 Tab 接健身计划入口」）。
+/// 健身计划卡测试锚点（排期/开练链路 e2e 锚）。
 const Key planWorkoutCardKey = ValueKey('plan_workout_card');
 
 /// 「开始训练」按钮测试锚点（`plan_workout_start_<planId>`）。
 Key planWorkoutStartKey(String planId) =>
     ValueKey('plan_workout_start_$planId');
 
-/// 「模板」入口按钮测试锚点（/plan/plans → feature_plan FitnessPlanPage）。
+/// 「健身计划」入口按钮测试锚点（/plan/plans → feature_plan FitnessPlanPage）。
 const Key planWorkoutTemplatesKey = ValueKey('plan_workout_templates');
 
-/// 「继续训练」按钮测试锚点（该计划已有进行中训练）。
+/// 「继续训练」按钮测试锚点（已有进行中训练）。
 const Key planWorkoutResumeKey = ValueKey('plan_workout_resume');
 
-/// 目标建档表单锚点（名称/金额/提交）。
-const Key planGoalNameFieldKey = ValueKey('plan_goal_name_field');
-const Key planGoalTargetFieldKey = ValueKey('plan_goal_target_field');
-const Key planGoalSubmitKey = ValueKey('plan_goal_submit');
+/// 存钱目标尾行测试锚点（/plan/savings → feature_plan SavingsPage）。
+const Key planSavingsManageKey = ValueKey('plan_savings_manage');
 
-/// 投币打卡按钮测试锚点（`plan_savings_coin_<goalId>`）。
-Key planSavingsCoinKey(String goalId) =>
-    ValueKey('plan_savings_coin_$goalId');
-
-/// 投币表单锚点（金额预填/提交）。
-const Key planCoinAmountFieldKey = ValueKey('plan_coin_amount_field');
-const Key planCoinSubmitKey = ValueKey('plan_coin_submit');
-
-/// 重复档位（§3.6 待办完整版 W13 基础档：不重复/每天/每周/每月）。
-const Map<String, String> _repeatRuleByWire = <String, String>{
-  'none': '',
-  'daily': 'FREQ=DAILY',
-  'weekly': 'FREQ=WEEKLY',
-  'monthly': 'FREQ=MONTHLY',
-};
+/// 存钱目标行测试锚点（`plan_savings_goal_<goalId>`；行点进详情页）。
+Key planSavingsGoalRowKey(String goalId) =>
+    ValueKey('plan_savings_goal_$goalId');
 
 /// 计划 Tab。
 class PlanPage extends ConsumerWidget {
@@ -89,21 +79,44 @@ class PlanPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final selectedDate = ref.watch(selectedDateProvider);
     final date = formatCalendarDay(selectedDate);
+    final spacing = context.spacing;
+    final sizes = context.sizes;
+    const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('计划')),
+      appBar: AppBar(
+        centerTitle: false,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('计划'),
+            Text(
+              '${calendarDayLabel(date)} · 周${weekdayLabels[selectedDate.weekday - 1]}'
+              '（改日期回「今天」Tab）',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: context.slimca.onSurfaceMuted,
+                  ),
+            ),
+          ],
+        ),
+      ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+          // 底部留白（底栏重设计拍板）：清中央花瓣按钮凸出栏体（cradle 间隙
+          // 约 34）+ 呼吸——space600+rowSingleLine+space200 组合表达。
+          padding: EdgeInsets.fromLTRB(
+            spacing.space200,
+            spacing.space100,
+            spacing.space200,
+            spacing.space600 + sizes.rowSingleLine + spacing.space200,
+          ),
           children: [
-            _PlanTodoCard(date: date),
+            _TodoCard(date: date),
             const SizedBox(height: 12),
-            _PlanFitnessCard(date: date),
+            _FitnessCard(date: date),
             const SizedBox(height: 12),
-            // W14 健身计划卡（§11.2 W14 任务 1：计划列表/今日排期卡入口）。
-            _PlanWorkoutCard(date: date),
-            const SizedBox(height: 12),
-            const _PlanSavingsCard(),
+            const _SavingsCard(),
           ],
         ),
       ),
@@ -152,110 +165,84 @@ class _PlanCardHeader extends StatelessWidget {
   }
 }
 
-// ── 待办卡（§3.6 待办完整版 W13：RRULE+提醒、§5.5⑩）────────────────────
+/// 卡尾域入口行（menu-tile 形态：图标 + 标题 + 副标题 + chevron；域主页的
+/// 唯一入口，单一入口纪律）。
+class _DomainTile extends StatelessWidget {
+  const _DomainTile({
+    required super.key,
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
 
-/// 待办卡：当日待办清单 + 快速添加（未完成在前，TodoDao 排序口径）+
-/// 重复/提醒选项行（W13 完整版基础档）。
-class _PlanTodoCard extends ConsumerStatefulWidget {
-  const _PlanTodoCard({required this.date});
-
-  /// 归属日（§3.2 一切围绕日期；随仪表盘选中日）。
-  final String date;
-
-  @override
-  ConsumerState<_PlanTodoCard> createState() => _PlanTodoCardState();
-}
-
-class _PlanTodoCardState extends ConsumerState<_PlanTodoCard> {
-  final _inputController = TextEditingController();
-
-  /// 重复档位 wire（none=不重复；§3.6 W13 基础档）。
-  String _repeat = 'none';
-
-  /// 提醒时刻（当日 HH:mm；null=不提醒）。
-  TimeOfDay? _remindTime;
-
-  @override
-  void dispose() {
-    _inputController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickRemindTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: _remindTime ?? const TimeOfDay(hour: 8, minute: 0),
-      helpText: '选择提醒时刻',
-    );
-    if (picked != null) {
-      setState(() => _remindTime = picked);
-    }
-  }
-
-  Future<void> _addTodo() async {
-    final title = _inputController.text.trim();
-    if (title.isEmpty) return;
-    _inputController.clear();
-    // §5.5⑩ create：date 归属当日（date 列非收集箱语义）；W13 重复/提醒：
-    // - repeat_rule=RRULE 文本（锚点由 TodoDao 缺省回填计划日=DTSTART）；
-    // - remind_at=归属日所选时刻的 UTC ms（本地通知调度由
-    //   ReminderSyncCoordinator 按展开实例落，§11.2 W13 任务 3）。
-    final repeatRule = _repeatRuleByWire[_repeat];
-    final hasRepeat = repeatRule != null && repeatRule.isNotEmpty;
-    int? remindAt;
-    if (_remindTime != null) {
-      final selected = DateTime.parse(widget.date); // 本地 00:00（§5.1）
-      remindAt = DateTime(
-        selected.year,
-        selected.month,
-        selected.day,
-        _remindTime!.hour,
-        _remindTime!.minute,
-      ).millisecondsSinceEpoch;
-    }
-    final dao = ref.read(todoDaoProvider);
-    await dao.create(
-      title: title,
-      date: widget.date,
-      repeatRule: hasRepeat ? repeatRule : null,
-      remindAt: remindAt,
-    );
-    // W13 漏斗（§11.2 任务 4）：重复待办建档即记（props 只带频率枚举，
-    // §3.9 内容禁入）。
-    if (hasRepeat) {
-      final freq = repeatRule
-          .split(';')
-          .firstWhere((p) => p.startsWith('FREQ='), orElse: () => 'FREQ=?')
-          .substring(5)
-          .toLowerCase();
-      await ref
-          .read(telemetryServiceProvider)
-          .funnel(
-            W13TelemetryFunnel.todoRecurrenceCreated,
-            props: <String, Object?>{'freq': freq},
-          );
-    }
-    // 提醒权限运行时请求（Android 13+ POST_NOTIFICATIONS，§11.2 任务 3）：
-    // 用户显式设置提醒时发起，权限被拒不阻塞（调度照常落、系统不展示）。
-    if (remindAt != null) {
-      await ref.read(reminderSchedulerProvider).ensurePermission();
-    }
-  }
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.slimca;
     final textTheme = Theme.of(context).textTheme;
-    final asyncTodos = ref.watch(planTodosProvider(widget.date));
-    final todos = asyncTodos.value ?? const <db.Todo>[];
-    final done = todos.where((t) => t.doneAt != null).length;
+    return InkWell(
+      key: key,
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Icon(icon, size: 20, color: iconColor),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '$title · $subtitle',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.bodyMedium?.copyWith(
+                  color: tokens.onSurface,
+                ),
+              ),
+            ),
+            Icon(Icons.chevron_right,
+                size: 20, color: tokens.onSurfaceMuted),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── 今日待办卡（§3.6 待办：勾选/快加轻层 + 编辑抽屉重层）────────────────
+
+/// 今日待办卡：当日实例行（重复待办查询时展开，不预生成行）+ 快速添加 +
+/// 收集箱尾行。
+class _TodoCard extends ConsumerWidget {
+  const _TodoCard({required this.date});
+
+  /// 归属日（§3.2 一切围绕日期；随仪表盘选中日）。
+  final String date;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tokens = context.slimca;
+    final textTheme = Theme.of(context).textTheme;
+    final instances =
+        ref.watch(fp.todoDayInstancesProvider(date)).value;
+    final inboxCount =
+        ref.watch(fp.inboxTodosProvider).value?.length ?? 0;
+    final todos = instances ?? const <fp.TodoDayInstance>[];
+    final done = todos.where((t) => t.done).length;
 
     return _PlanCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _PlanCardHeader(
-            title: '待办',
+            title: '今日待办',
             trailing: Text(
               '${todos.isEmpty ? 0 : done}/${todos.length}',
               style: textTheme.labelMedium?.copyWith(
@@ -264,105 +251,34 @@ class _PlanTodoCardState extends ConsumerState<_PlanTodoCard> {
             ),
           ),
           const SizedBox(height: 8),
-          if (todos.isEmpty)
+          if (instances == null)
+            const SizedBox(
+              height: 40,
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (todos.isEmpty)
             Text(
-              '今日暂无待办，添加一条（§3.6 待办完整版：支持重复与提醒）',
+              '今天没有待办，添加一条',
               style: textTheme.bodySmall?.copyWith(
                 color: tokens.onSurfaceMuted,
               ),
             )
           else
-            for (final todo in todos)
+            for (final instance in todos)
               _TodoRow(
-                key: ValueKey('plan_todo_${todo.id}'),
-                todo: todo,
-                onToggle: (done) => ref
-                    .read(todoDaoProvider)
-                    .setDone(todo.id, done: done),
+                key: ValueKey('plan_todo_${instance.todo.id}'),
+                instance: instance,
               ),
           const SizedBox(height: 8),
-          // W13 重复/提醒选项行（§3.6 待办完整版基础档）。
-          Row(
-            children: [
-              Expanded(
-                child: SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'none', label: Text('不重复')),
-                    ButtonSegment(value: 'daily', label: Text('每天')),
-                    ButtonSegment(value: 'weekly', label: Text('每周')),
-                    ButtonSegment(value: 'monthly', label: Text('每月')),
-                  ],
-                  selected: {_repeat},
-                  showSelectedIcon: false,
-                  style: const ButtonStyle(
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onSelectionChanged: (selection) =>
-                      setState(() => _repeat = selection.first),
-                ),
-              ),
-              const SizedBox(width: 8),
-              InkWell(
-                key: const ValueKey('plan_todo_remind_toggle'),
-                borderRadius: BorderRadius.circular(12),
-                onTap: _pickRemindTime,
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.alarm_outlined,
-                        size: 18,
-                        color: _remindTime != null
-                            ? tokens.primary
-                            : tokens.onSurfaceMuted,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        _remindTime == null
-                            ? '提醒'
-                            : '${_remindTime!.hour.toString().padLeft(2, '0')}:'
-                                '${_remindTime!.minute.toString().padLeft(2, '0')}',
-                        style: textTheme.labelMedium?.copyWith(
-                          color: _remindTime != null
-                              ? tokens.primary
-                              : tokens.onSurfaceMuted,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  key: planTodoInputKey,
-                  controller: _inputController,
-                  textInputAction: TextInputAction.done,
-                  onSubmitted: (_) => _addTodo(),
-                  style: textTheme.bodyMedium,
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    hintText: '添加待办，如 晨跑 30 分钟',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                key: planTodoAddKey,
-                tooltip: '添加待办',
-                onPressed: _addTodo,
-                icon: Icon(Icons.add_circle_outline, color: tokens.primary),
-              ),
-            ],
+          _QuickAddRow(date: date),
+          const SizedBox(height: 4),
+          _DomainTile(
+            key: planInboxTileKey,
+            icon: Icons.inbox_outlined,
+            iconColor: tokens.primary,
+            title: '收集箱',
+            subtitle: inboxCount > 0 ? '$inboxCount 条待整理' : '已清空',
+            onTap: () => context.push('/plan/todos'),
           ),
         ],
       ),
@@ -370,283 +286,252 @@ class _PlanTodoCardState extends ConsumerState<_PlanTodoCard> {
   }
 }
 
-/// 单条待办行：勾选 + 标题（完成划线）+ 重复/提醒徽标（W13 完整版）。
-class _TodoRow extends StatelessWidget {
-  const _TodoRow({super.key, required this.todo, required this.onToggle});
+/// 快速添加行（轻层）：只产当日无重复待办；「详细」进编辑抽屉重层
+/// （重复 5 档/提醒/备注），两条创建路径按能力切分不重叠。
+class _QuickAddRow extends ConsumerStatefulWidget {
+  const _QuickAddRow({required this.date});
 
-  final db.Todo todo;
-  final ValueChanged<bool> onToggle;
+  final String date;
+
+  @override
+  ConsumerState<_QuickAddRow> createState() => _QuickAddRowState();
+}
+
+class _QuickAddRowState extends ConsumerState<_QuickAddRow> {
+  final _inputController = TextEditingController();
+
+  @override
+  void dispose() {
+    _inputController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _add() async {
+    final title = _inputController.text.trim();
+    if (title.isEmpty) return;
+    _inputController.clear();
+    // 轻层创建（§5.5⑩）：date 归属当日；重复/提醒只能进编辑抽屉（重层），
+    // 重复档位创建只剩编辑器一处（语义分叉消失）。
+    await ref.read(todoDaoProvider).create(title: title, date: widget.date);
+  }
+
+  void _openEditor({db.Todo? todo}) {
+    showSlimcaSpringSheet<void>(
+      context: context,
+      builder: (_) => fp.TodoEditorSheet(todo: todo, planDate: widget.date),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.slimca;
     final textTheme = Theme.of(context).textTheme;
-    final done = todo.doneAt != null;
-    final hasRepeat =
-        todo.repeatRule != null && todo.repeatRule!.trim().isNotEmpty;
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: () => onToggle(!done),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 24,
-              height: 24,
-              child: Checkbox(
-                value: done,
-                onChanged: (v) => onToggle(v ?? false),
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            key: planTodoInputKey,
+            controller: _inputController,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _add(),
+            style: textTheme.bodyMedium,
+            decoration: const InputDecoration(
+              isDense: true,
+              hintText: '添加待办，如 晨跑 30 分钟',
+              border: OutlineInputBorder(),
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                todo.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.bodyMedium?.copyWith(
-                  color: done ? tokens.onSurfaceMuted : tokens.onSurface,
-                  decoration:
-                      done ? TextDecoration.lineThrough : TextDecoration.none,
-                ),
-              ),
-            ),
-            // W13 徽标：重复（RRULE）与提醒（remind_at）一眼可辨（§3.6）。
-            if (hasRepeat)
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: Icon(Icons.repeat, size: 16, color: tokens.primary),
-              ),
-            if (todo.remindAt != null)
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: Icon(Icons.alarm, size: 16, color: tokens.primary),
-              ),
-          ],
+          ),
         ),
-      ),
+        const SizedBox(width: 8),
+        IconButton(
+          key: planTodoAdvancedKey,
+          tooltip: '详细（重复/提醒）',
+          onPressed: () => _openEditor(),
+          icon: const Icon(Icons.tune),
+        ),
+        IconButton(
+          key: planTodoAddKey,
+          tooltip: '添加待办',
+          onPressed: _add,
+          icon: Icon(Icons.add_circle_outline, color: tokens.primary),
+        ),
+      ],
     );
   }
 }
 
-// ── 健身卡（§3.5 健身记录与热量收支、§5.5⑦）────────────────────────
+/// 单条待办实例行：勾选（就地完成，done_at 只前进）+ 标题（完成划线）+
+/// 重复/提醒徽标；点标题进编辑抽屉（编辑/删除/重复/提醒）。
+class _TodoRow extends ConsumerWidget {
+  const _TodoRow({super.key, required this.instance});
 
-/// 健身卡：当日会话列表 +「记录健身」入口（/plan/fitness，§4.3）。
-class _PlanFitnessCard extends ConsumerWidget {
-  const _PlanFitnessCard({required this.date});
-
-  final String date;
+  final fp.TodoDayInstance instance;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tokens = context.slimca;
     final textTheme = Theme.of(context).textTheme;
-    final sessions =
-        ref.watch(planSessionsProvider(date)).value ?? const <db.FitnessSession>[];
-
-    return _PlanCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    final todo = instance.todo;
+    final done = instance.done;
+    final hasRepeat = instance.recurring;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
         children: [
-          _PlanCardHeader(
-            title: '健身',
-            trailing: TextButton(
-              key: planFitnessAddKey,
-              onPressed: () => context.push('/plan/fitness'),
-              child: Text(
-                '记录健身',
-                style: TextStyle(fontSize: 14, color: tokens.primary),
-              ),
+          SizedBox(
+            width: 24,
+            height: 24,
+            child: Checkbox(
+              key: planTodoCheckKey(todo.id),
+              value: done,
+              onChanged: (v) => ref
+                  .read(fp.planGatewayProvider)
+                  .setTodoDone(todo.id, done: v ?? false),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
           ),
-          const SizedBox(height: 4),
-          if (sessions.isEmpty)
-            Text(
-              '今日暂无健身记录。手动记一笔，消耗计入运动条与净热量'
-              '（MET 估算 ±20%，§3.5）',
-              style: textTheme.bodySmall?.copyWith(
-                color: tokens.onSurfaceMuted,
+          const SizedBox(width: 10),
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => showSlimcaSpringSheet<void>(
+                context: context,
+                builder: (_) => fp.TodoEditorSheet(todo: todo),
               ),
-            )
-          else
-            for (final session in sessions)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
                 child: Row(
                   children: [
-                    Icon(
-                      Icons.fitness_center,
-                      size: 18,
-                      color: tokens.kcalOut,
-                    ),
-                    const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        _sessionTitle(session),
+                        todo.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodyMedium,
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: done
+                              ? tokens.onSurfaceMuted
+                              : tokens.onSurface,
+                          decoration: done
+                              ? TextDecoration.lineThrough
+                              : TextDecoration.none,
+                        ),
                       ),
                     ),
-                    Text(
-                      '消耗 ${session.kcalBurn} kcal',
-                      style: textTheme.bodyMedium?.copyWith(
-                        color: tokens.kcalOut,
+                    // 徽标：重复（RRULE）与提醒（remind_at）一眼可辨（§3.6）。
+                    if (hasRepeat)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: Icon(Icons.repeat,
+                            size: 16, color: tokens.primary),
                       ),
-                    ),
+                    if (todo.remindAt != null)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: Icon(Icons.alarm,
+                            size: 16, color: tokens.primary),
+                      ),
                   ],
                 ),
               ),
+            ),
+          ),
         ],
       ),
     );
   }
-
-  /// 会话标题：备注优先，缺省「类型 + 分钟」（与 FitnessService 写路径同口径）。
-  String _sessionTitle(db.FitnessSession session) {
-    final note = session.note;
-    if (note != null && note.trim().isNotEmpty) return note.trim();
-    final label = kFitnessTypeLabels[session.type] ?? '健身';
-    return '$label ${session.durationS ~/ 60} 分钟';
-  }
 }
 
-// ── 健身计划卡（§3.5 健身计划 P1、§5.5⑧、§11.2 W14 任务 1）────────────
+// ── 今日健身卡（四态互斥：训练中横幅 > 排期 > 已练 > 空态）────────────
 
-/// 健身计划卡：今日排期段 + 计划列表段（§3.5「训练模板按周排期」、§5.5⑧）。
-///
-/// - 今日排期段：weekday_mask 命中且已开跑的启用中计划（planScheduleProvider，
-///   随仪表盘选中日 §3.2 一切围绕日期）；行内「开始训练」直开组间计时器
-///   （W14 任务 2/3 副作用链：开练→常亮+常驻通知+workout_started 漏斗）；
-///   该计划已有进行中训练 →「继续训练」回训练页（状态不重建）；
-/// - 计划列表段：启用中计划全集（activeFitnessPlansProvider）——名称+排期日
-///   +起始日；计划模板建档/编辑入口随计划域页面（feature_plan
-///   FitnessPlanPage）装配接入（§10.4），壳内暂不重复建档 UI。
-class _PlanWorkoutCard extends ConsumerWidget {
-  const _PlanWorkoutCard({required this.date});
+/// 今日健身卡（一卡一叙事）：训练中横幅（壳层引擎全局态）→ 今日排期行
+/// （唯一开练入口）→ 已练摘要（纯信息不可点）→ 空态。
+class _FitnessCard extends ConsumerWidget {
+  const _FitnessCard({required this.date});
 
-  /// 排期归属日（随仪表盘选中日，§3.2）。
   final String date;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tokens = context.slimca;
     final textTheme = Theme.of(context).textTheme;
+    final session = ref.watch(workoutSessionProvider);
     final schedule = ref.watch(planScheduleProvider(date)).value ??
         const <FitnessPlanScheduleView>[];
-    final plans = ref.watch(activeFitnessPlansProvider).value ??
-        const <db.FitnessPlan>[];
-    final session = ref.watch(workoutSessionProvider);
+    final sessions = ref.watch(planSessionsProvider(date)).value ??
+        const <db.FitnessSession>[];
 
     return _PlanCard(
       child: Column(
         key: planWorkoutCardKey,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _PlanCardHeader(
-            title: '健身计划',
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // W14 模板建档/编辑入口（§10.4 装配接入）：/plan/plans
-                // 挂 feature_plan FitnessPlanPage（模板=动作/组数/重量配比/
-                // 休息秒+按周排期 §5.5⑧），壳内不重复建档 UI。
-                TextButton.icon(
-                  key: planWorkoutTemplatesKey,
-                  onPressed: () => context.push('/plan/plans'),
-                  icon: const Icon(Icons.edit_calendar_outlined, size: 16),
-                  label: const Text('模板'),
-                ),
-                Text(
-                  '${plans.length} 个启用',
-                  style: textTheme.labelMedium?.copyWith(
-                    color: tokens.onSurfaceMuted,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          _PlanCardHeader(title: '今日健身'),
           const SizedBox(height: 8),
-          Text(
-            '排期 · ${calendarDayLabel(date)}',
-            style: textTheme.labelMedium?.copyWith(
-              color: tokens.onSurfaceMuted,
-            ),
-          ),
-          const SizedBox(height: 4),
-          if (schedule.isEmpty)
-            Text(
-              '今日无排期。启用中的计划按周掩码自动排期（§5.5⑧）',
-              style: textTheme.bodySmall?.copyWith(
-                color: tokens.onSurfaceMuted,
-              ),
-            )
-          else
+          if (session != null)
+            _ActiveSessionBanner(session: session)
+          else if (schedule.isNotEmpty)
             for (final view in schedule) ...[
-              _PlanScheduleRow(
+              _ScheduleRow(
                 key: ValueKey('plan_schedule_${view.plan.id}'),
                 view: view,
-                isActive: session?.planId == view.plan.id,
                 onStart: () => _start(context, ref, view),
-                onResume: () => context.push('/plan/workout'),
               ),
               const SizedBox(height: 8),
-            ],
-          const SizedBox(height: 4),
-          Text(
-            '计划',
-            style: textTheme.labelMedium?.copyWith(
-              color: tokens.onSurfaceMuted,
-            ),
-          ),
-          const SizedBox(height: 4),
-          if (plans.isEmpty)
+            ]
+          else if (sessions.isNotEmpty) ...[
             Text(
-              '还没有启用中的健身计划（W14：模板=动作/组数/重量/休息秒，'
-              '按周排期自动出排期卡，§5.5⑧）',
+              '今日已练 ${sessions.length} 次',
+              style: textTheme.bodyMedium?.copyWith(color: tokens.onSurface),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '消耗 ${sessions.fold<int>(0, (sum, s) => sum + s.kcalBurn)} kcal',
+              style: textTheme.bodyMedium?.copyWith(color: tokens.kcalOut),
+            ),
+          ] else ...[
+            Text(
+              '今天没有健身安排',
+              style: textTheme.bodyMedium?.copyWith(color: tokens.onSurface),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '去「健身计划」排个模板，或「记录健身」记一笔',
               style: textTheme.bodySmall?.copyWith(
                 color: tokens.onSurfaceMuted,
               ),
-            )
-          else
-            for (final plan in plans)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.calendar_month_outlined,
-                      size: 16,
-                      color: tokens.kcalOut,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        plan.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodyMedium,
-                      ),
-                    ),
-                    Text(
-                      '${fitnessWeekdaysLabel(plan.weekdayMask)}'
-                      ' · 起始 ${plan.startDate}',
-                      style: textTheme.bodySmall?.copyWith(
-                        color: tokens.onSurfaceMuted,
-                      ),
-                    ),
-                  ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              TextButton(
+                key: planWorkoutTemplatesKey,
+                onPressed: () => context.push('/plan/plans'),
+                child: Text(
+                  '健身计划',
+                  style: TextStyle(fontSize: 14, color: tokens.primary),
                 ),
               ),
+              TextButton(
+                key: planFitnessAddKey,
+                onPressed: () => Navigator.of(context).push(
+                  SlimcaSharedAxisPageRoute<void>(
+                      builder: (_) => const fp.FitnessLogPage()),
+                ),
+                child: Text(
+                  '记录健身',
+                  style: TextStyle(fontSize: 14, color: tokens.primary),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 
-  /// 开练（§3.5 计划日训练）：置训练中态（常亮+常驻通知+workout_started）
-  /// → 推入训练页（§4.3 /plan/workout 子路由，分支栈内 push）。
+  /// 开练（全 App 唯一开练入口）：壳层引擎置态（常亮+常驻通知+workout_started
+  /// 漏斗）→ 推入训练页（/plan/workout，分支栈内 push）。
   Future<void> _start(
     BuildContext context,
     WidgetRef ref,
@@ -661,33 +546,65 @@ class _PlanWorkoutCard extends ConsumerWidget {
   }
 }
 
-/// 排期行：计划名 + 模板摘要 + 开始/继续训练（W14 任务 1）。
-class _PlanScheduleRow extends StatelessWidget {
-  const _PlanScheduleRow({
+/// 训练中横幅：继续训练（状态不重建）；控制面（完成一组/跳过休息/结束并
+/// 保存）唯一在训练页，横幅只导航（避免控制面重复）。
+class _ActiveSessionBanner extends StatelessWidget {
+  const _ActiveSessionBanner({required this.session});
+
+  final WorkoutSessionState session;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = context.slimca;
+    return Material(
+      color: tokens.surfaceMuted,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Icon(Icons.fitness_center, size: 18, color: tokens.kcalOut),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '训练进行中 · ${session.planName} · '
+                '已完成 ${session.sets.length}/${session.totalSets} 组',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 14, color: tokens.onSurface),
+              ),
+            ),
+            TextButton(
+              key: planWorkoutResumeKey,
+              onPressed: () => context.push('/plan/workout'),
+              child: const Text('继续训练'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 排期行：计划名 + 模板摘要 + 开始训练。
+class _ScheduleRow extends StatelessWidget {
+  const _ScheduleRow({
     super.key,
     required this.view,
-    required this.isActive,
     required this.onStart,
-    required this.onResume,
   });
 
   final FitnessPlanScheduleView view;
-
-  /// 该计划已有进行中训练（→ 继续训练）。
-  final bool isActive;
-
   final VoidCallback onStart;
-  final VoidCallback onResume;
 
   @override
   Widget build(BuildContext context) {
     final tokens = context.slimca;
     final textTheme = Theme.of(context).textTheme;
     final exercises = view.exercises;
-    final totalSets =
-        exercises.fold(0, (sum, e) => sum + e.sets);
+    final totalSets = exercises.fold(0, (sum, e) => sum + e.sets);
     final summary = exercises.isEmpty
-        ? '模板待完善（§5.5⑧）'
+        ? '模板待完善'
         : '${exercises.first.name} 等 ${exercises.length} 个动作 · 共 $totalSets 组';
     return Row(
       children: [
@@ -719,443 +636,138 @@ class _PlanScheduleRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        isActive
-            ? TextButton(
-                key: planWorkoutResumeKey,
-                onPressed: onResume,
-                child: const Text('继续训练'),
-              )
-            : FilledButton.tonal(
-                key: planWorkoutStartKey(view.plan.id),
-                onPressed: onStart,
-                style: FilledButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                ),
-                child: const Text('开始训练'),
-              ),
+        FilledButton.tonal(
+          key: planWorkoutStartKey(view.plan.id),
+          onPressed: onStart,
+          style: FilledButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+          ),
+          child: const Text('开始训练'),
+        ),
       ],
     );
   }
 }
 
-// ── 存钱卡（§3.6 存钱目标 P1 留存钩子、§5.5⑪⑫、§11.2 W13）────────────
+// ── 今日存钱卡（行内一键投币 + 行点详情 + 尾行唯一列表入口）────────────
 
-/// 存钱目标卡（W13 真数据）：打卡中目标 + Σ贡献进度 +「新建目标/投币打卡」。
-class _PlanSavingsCard extends ConsumerWidget {
-  const _PlanSavingsCard();
+/// 今日存钱卡：进行中目标行（一键投币 = 打卡动效落点）+「存钱目标」尾行
+/// （列表/新建唯一入口）。空态=尾行副标题引导建档。
+class _SavingsCard extends ConsumerWidget {
+  const _SavingsCard();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tokens = context.slimca;
-    final textTheme = Theme.of(context).textTheme;
-    final goals = ref.watch(planSavingsGoalsProvider).value ??
-        const <PlanSavingsGoalView>[];
+    final views = ref.watch(fp.savingsGoalsProvider).value;
+    final goals = views ?? const <fp.SavingsGoalView>[];
 
     return _PlanCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _PlanCardHeader(
-            title: '存钱目标',
-            trailing: TextButton(
-              key: planSavingsCreateKey,
-              onPressed: () => _showGoalSheet(context),
-              child: Text(
-                '新建目标',
-                style: TextStyle(fontSize: 14, color: tokens.primary),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          if (goals.isEmpty)
-            Text(
-              '设定第一个存钱目标，投币打卡攒下来'
-              '（§3.6 存钱目标：365 法/52 周法/自定义，进度=贡献求和）',
-              style: textTheme.bodySmall?.copyWith(
-                color: tokens.onSurfaceMuted,
-              ),
+          _PlanCardHeader(title: '存钱目标'),
+          const SizedBox(height: 8),
+          if (views == null)
+            const SizedBox(
+              height: 40,
+              child: Center(child: CircularProgressIndicator()),
             )
           else
-            for (final view in goals) ...[
+            for (final view in goals)
               _SavingsGoalRow(
-                key: ValueKey('plan_goal_${view.goal.id}'),
+                key: planSavingsGoalRowKey(view.goal.id),
                 view: view,
-                onCoinIn: () => _showCoinSheet(context, view),
               ),
-              const SizedBox(height: 8),
-            ],
+          _DomainTile(
+            key: planSavingsManageKey,
+            icon: Icons.savings_outlined,
+            iconColor: tokens.moneyIn,
+            title: '存钱目标',
+            subtitle: goals.isEmpty
+                ? '设定第一个存钱目标，投币打卡攒下来'
+                : '${goals.length} 个进行中',
+            onTap: () => context.push('/plan/savings'),
+          ),
         ],
       ),
     );
   }
-
-  /// 新建目标表单（§3.6 目标+金额+存钱法）。
-  Future<void> _showGoalSheet(BuildContext context) {
-    return showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => const _SavingsGoalSheet(),
-    );
-  }
-
-  /// 投币打卡表单（§3.6 投币式打卡：当日贡献 append-only 追加）。
-  Future<void> _showCoinSheet(
-    BuildContext context,
-    PlanSavingsGoalView view,
-  ) {
-    return showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => _CoinInSheet(view: view),
-    );
-  }
 }
 
-/// 单个目标行：进度（金额 + 百分比 + 进度条）+ 投币入口。
-class _SavingsGoalRow extends StatelessWidget {
-  const _SavingsGoalRow({
-    super.key,
-    required this.view,
-    required this.onCoinIn,
-  });
+/// 单个目标行：名称 + 金额进度（moneyIn 语义色）+ 一键投币；行点进目标
+/// 详情页（进度环/贡献历史/标记达成/删除——壳层此前完全不可达的能力）。
+class _SavingsGoalRow extends ConsumerWidget {
+  const _SavingsGoalRow({super.key, required this.view});
 
-  final PlanSavingsGoalView view;
-  final VoidCallback onCoinIn;
+  final fp.SavingsGoalView view;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final tokens = context.slimca;
     final textTheme = Theme.of(context).textTheme;
     final percent = (view.progress * 100).round();
-    return Row(
-      children: [
-        Icon(Icons.savings_outlined, size: 20, color: tokens.moneyOut),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                view.goal.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '${yuanFromMinor(view.contributedMinor)} / '
-                '${yuanFromMinor(view.goal.targetMinor)}（$percent%）',
-                style: textTheme.bodySmall?.copyWith(
-                  color: tokens.onSurfaceMuted,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => Navigator.of(context).push(
+                SlimcaSharedAxisPageRoute<void>(
+                  builder: (_) =>
+                      fp.SavingsGoalDetailPage(goalId: view.goal.id),
                 ),
               ),
-              const SizedBox(height: 6),
-              // 进度条（§3.6 进度=贡献行求和；投币后 reactive 流即时推进）。
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween(begin: 0, end: view.progress),
-                  duration: MotionConfig.of(context).durM,
-                  curve: Curves.easeOutCubic,
-                  builder: (context, value, _) => LinearProgressIndicator(
-                    value: value,
-                    minHeight: 6,
-                    backgroundColor: tokens.outline,
-                    valueColor: AlwaysStoppedAnimation<Color>(tokens.moneyOut),
-                  ),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      view.goal.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${yuanFromMinor(view.contributedMinor)} / '
+                      '${yuanFromMinor(view.goal.targetMinor)}（$percent%）',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: tokens.moneyIn,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    // 进度条（进度=贡献行求和；投币后 reactive 流即时推进）。
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 0, end: view.progress),
+                        duration: MotionConfig.of(context).durM,
+                        curve: Curves.easeOutCubic,
+                        builder: (context, value, _) =>
+                            LinearProgressIndicator(
+                          value: value,
+                          minHeight: 6,
+                          backgroundColor: tokens.outline,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                              tokens.moneyIn),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
+            ),
           ),
-        ),
-        IconButton(
-          key: planSavingsCoinKey(view.goal.id),
-          tooltip: '投币打卡',
-          onPressed: onCoinIn,
-          icon: Icon(Icons.paid_outlined, color: tokens.moneyOut),
-        ),
-      ],
-    );
-  }
-}
-
-/// 新建存钱目标表单（§3.6：名称/目标金额/存钱法；custom 附每日建议额）。
-class _SavingsGoalSheet extends ConsumerStatefulWidget {
-  const _SavingsGoalSheet();
-
-  @override
-  ConsumerState<_SavingsGoalSheet> createState() => _SavingsGoalSheetState();
-}
-
-class _SavingsGoalSheetState extends ConsumerState<_SavingsGoalSheet> {
-  final _nameController = TextEditingController();
-  final _targetController = TextEditingController();
-  final _dailyController = TextEditingController();
-
-  /// 存钱法（§5.5⑪ method 枚举；缺省自定义）。
-  String _method = db.kSavingsMethodCustom;
-  String? _errorText;
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _targetController.dispose();
-    _dailyController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    final name = _nameController.text.trim();
-    final target = parseYuanToFen(_targetController.text.trim());
-    if (name.isEmpty || target == null) {
-      setState(() => _errorText = '目标名与目标金额（元）必填');
-      return;
-    }
-    if (_method == db.kSavingsMethodCustom) {
-      final daily = parseYuanToFen(_dailyController.text.trim());
-      if (daily == null) {
-        setState(() => _errorText = '自定义存钱法需填写每日金额');
-        return;
-      }
-      await ref.read(savingsServiceProvider).createGoal(
-            name: name,
-            targetMinor: target,
-            method: _method,
-            dailyAmountMinor: daily,
-          );
-    } else {
-      await ref.read(savingsServiceProvider).createGoal(
-            name: name,
-            targetMinor: target,
-            method: _method,
-          );
-    }
-    if (mounted) Navigator.of(context).pop();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.slimca;
-    final textTheme = Theme.of(context).textTheme;
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          16,
-          16,
-          16 + MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('新建存钱目标（§3.6）', style: textTheme.titleMedium),
-            const SizedBox(height: 12),
-            TextField(
-              key: planGoalNameFieldKey,
-              controller: _nameController,
-              style: textTheme.bodyMedium,
-              decoration: const InputDecoration(
-                labelText: '目标名',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              key: planGoalTargetFieldKey,
-              controller: _targetController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              style: textTheme.bodyMedium,
-              decoration: const InputDecoration(
-                labelText: '目标金额（元）',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 10),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(
-                  value: db.kSavingsMethodCustom,
-                  label: Text('自定义'),
-                ),
-                ButtonSegment(
-                  value: db.kSavingsMethodDaily365,
-                  label: Text('365 法'),
-                ),
-                ButtonSegment(
-                  value: db.kSavingsMethodWeek52,
-                  label: Text('52 周法'),
-                ),
-              ],
-              selected: {_method},
-              showSelectedIcon: false,
-              onSelectionChanged: (selection) =>
-                  setState(() => _method = selection.first),
-            ),
-            if (_method == db.kSavingsMethodCustom) ...[
-              const SizedBox(height: 10),
-              TextField(
-                key: const ValueKey('plan_goal_daily_field'),
-                controller: _dailyController,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                style: textTheme.bodyMedium,
-                decoration: const InputDecoration(
-                  labelText: '每日存入（元，投币建议额）',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-            if (_method == db.kSavingsMethodDaily365 ||
-                _method == db.kSavingsMethodWeek52) ...[
-              const SizedBox(height: 6),
-              Text(
-                _method == db.kSavingsMethodDaily365
-                    ? '365 存钱法：第 N 天存 N 元（自起始日计格）'
-                    : '52 周存钱法：第 N 周存 N 元（自起始日计格）',
-                style: textTheme.bodySmall?.copyWith(
-                  color: tokens.onSurfaceMuted,
-                ),
-              ),
-            ],
-            if (_errorText != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                _errorText!,
-                style: textTheme.bodySmall?.copyWith(color: tokens.danger),
-              ),
-            ],
-            const SizedBox(height: 12),
-            FilledButton(
-              key: planGoalSubmitKey,
-              onPressed: _submit,
-              child: const Text('创建目标'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 投币打卡表单（§3.6 投币式打卡：当日贡献追加，append-only 幂等）。
-class _CoinInSheet extends ConsumerStatefulWidget {
-  const _CoinInSheet({required this.view});
-
-  final PlanSavingsGoalView view;
-
-  @override
-  ConsumerState<_CoinInSheet> createState() => _CoinInSheetState();
-}
-
-class _CoinInSheetState extends ConsumerState<_CoinInSheet> {
-  late final TextEditingController _amountController =
-      TextEditingController();
-  String? _errorText;
-
-  @override
-  void initState() {
-    super.initState();
-    // 建议额预填（§3.6 365/52 周法按第 N 格阶梯；custom 取每日额）。
-    final today = formatCalendarDay(DateTime.now());
-    final suggested = ref
-        .read(savingsServiceProvider)
-        .suggestedAmountMinor(widget.view.goal, today);
-    _amountController.text = minorToYuanText(suggested);
-  }
-
-  @override
-  void dispose() {
-    _amountController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    final amount = parseYuanToFen(_amountController.text.trim());
-    if (amount == null || amount <= 0) {
-      setState(() => _errorText = '存入金额（元）必须大于 0');
-      return;
-    }
-    final SavingsService service = ref.read(savingsServiceProvider);
-    final (_, inserted) = await service.coinIn(
-      widget.view.goal,
-      amountMinor: amount,
-    );
-    if (!mounted) return;
-    // 幂等命中（同日同来源重复投币）：友好反馈而非报错（§5.5⑫ 幂等口径）。
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(inserted ? '已投币入账' : '今日已投过币啦（幂等保留首次）'),
-      ),
-    );
-    Navigator.of(context).pop();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.slimca;
-    final textTheme = Theme.of(context).textTheme;
-    final today = formatCalendarDay(DateTime.now());
-    final slot = ref
-        .read(savingsServiceProvider)
-        .slotForDay(widget.view.goal, today);
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          16,
-          16,
-          16,
-          16 + MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              '投币打卡 · ${widget.view.goal.name}（§3.6）',
-              style: textTheme.titleMedium,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              slot == null
-                  ? '打卡日 $today · 进度 ${yuanFromMinor(widget.view.contributedMinor)}'
-                      ' / ${yuanFromMinor(widget.view.goal.targetMinor)}'
-                  : '今日第 $slot 格 · '
-                      '${widget.view.goal.method == db.kSavingsMethodDaily365 ? '天' : '周'}'
-                      ' · 进度 ${yuanFromMinor(widget.view.contributedMinor)}'
-                      ' / ${yuanFromMinor(widget.view.goal.targetMinor)}',
-              style: textTheme.bodySmall?.copyWith(
-                color: tokens.onSurfaceMuted,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              key: planCoinAmountFieldKey,
-              controller: _amountController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              style: textTheme.bodyMedium,
-              decoration: const InputDecoration(
-                labelText: '本次存入（元）',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            if (_errorText != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                _errorText!,
-                style: textTheme.bodySmall?.copyWith(color: tokens.danger),
-              ),
-            ],
-            const SizedBox(height: 12),
-            FilledButton(
-              key: planCoinSubmitKey,
-              onPressed: _submit,
-              child: const Text('投币'),
-            ),
-          ],
-        ),
+          const SizedBox(width: 8),
+          // 一键投币（留存钩子 0 跳打卡）：格子金额自动推算、今日已投置灰
+          // 幂等防重复（DAO 幂等键兜底）。
+          fp.SavingsCheckInButton(goal: view.goal),
+        ],
       ),
     );
   }

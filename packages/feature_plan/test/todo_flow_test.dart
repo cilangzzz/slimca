@@ -1,11 +1,11 @@
-/// 待办全链路 widget 测试（§11.1 W5-6 主线任务 2 验收、§3.6、§5.5⑩、
-/// §5.6、§6.5）。
+/// 待办全链路 widget 测试（§3.6、§5.5⑩、§5.6、§6.5；计划域 IA 重设计后
+/// TodoPage=收集箱页——今日待办由壳层计划 Tab「今日待办」卡承载，本文件
+/// 覆盖收集箱全链路与勾选投影语义）。
 ///
-/// 内存真库（NativeDatabase.memory）；断言勾选联动 day_summary 投影：
-/// 1. 今日待办：新增 → todos 落行（date=今天）→ 勾选 → todo_done=1 →
-///    取消 → todo_done=0（本地 unset 无并发时生效，§6.5）；
-/// 2. 收集箱：date IS NULL、不进日投影（§5.5⑩）→「加入今日」→ 投影
-///    todo_total=1 → 勾选 → todo_done=1。
+/// 内存真库（NativeDatabase.memory）；断言：
+/// 1. 收集箱：date IS NULL、不进日投影（§5.5⑩）→「加入今日」回填计划日 →
+///    投影 todo_total=1 → 勾选 → todo_done=1 → 取消 → todo_done=0
+///    （本地 unset 无并发时生效，§6.5）。
 ///
 /// 运行前提：集成阶段已 `flutter pub get`；宿主缺 sqlite3 运行库时温和跳过。
 library;
@@ -130,7 +130,8 @@ Future<cdb.DaySummary?> _summaryFor(_Harness harness, String date) async {
 
 void main() {
   testWidgets(
-    '今日待办：新增→勾选→投影 todo_done 更新→取消→回落（§11.1 W5-6 / §5.5⑩ / §5.6）',
+    '收集箱：新增 date IS NULL 不进日投影 →「加入今日」回填计划日 → 投影计数'
+    '（§5.5⑩ / §5.6；勾选投影语义由壳层今日待办卡与 core_db 测试覆盖）',
     (tester) async {
       final harness = _Harness();
       if (!await harness.init()) return;
@@ -140,64 +141,7 @@ void main() {
 
       await _pumpTodoPage(tester, harness);
 
-      // ① 新增（今日视图默认档）。
-      await tester.enterText(find.byKey(todoInputKey), '买菜');
-      await tester.tap(find.byKey(todoAddKey));
-      await _pumpUntilDb(
-        tester,
-        () async => (await _allTodos(harness))
-            .any((t) => t.title == '买菜' && t.date == today),
-      );
-      final todo =
-          (await _allTodos(harness)).firstWhere((t) => t.title == '买菜');
-      expect(todo.date, today);
-      expect(todo.doneAt, isNull);
-      expect(todo.deletedAt, isNull);
-      expect(todo.hlc, isNotEmpty);
-
-      // ② 投影先建立（todo_total=1、todo_done=0，§5.6）。
-      await _pumpUntilDb(
-        tester,
-        () async =>
-            (await _summaryFor(harness, today))?.todoTotal == 1,
-      );
-
-      // ③ 勾选 → todo_done=1（done_at 只前进合并 set 侧，§6.5）。
-      await tester.tap(find.byKey(todoCheckKey(todo.id)));
-      await _pumpUntilDb(
-        tester,
-        () async =>
-            (await _summaryFor(harness, today))?.todoDone == 1,
-      );
-      final doneTodo =
-          (await _allTodos(harness)).firstWhere((t) => t.id == todo.id);
-      expect(doneTodo.doneAt, isNotNull);
-
-      // ④ 取消 → 本地单写者 unset 生效、todo_done 回落 0（§6.5）。
-      await tester.tap(find.byKey(todoCheckKey(todo.id)));
-      await _pumpUntilDb(
-        tester,
-        () async =>
-            (await _summaryFor(harness, today))?.todoDone == 0,
-      );
-    },
-  );
-
-  testWidgets(
-    '收集箱：date IS NULL 不进日投影→加入今日→投影计数→勾选联动'
-    '（§5.5⑩ / §3.6 / §5.6）',
-    (tester) async {
-      final harness = _Harness();
-      if (!await harness.init()) return;
-      addTearDown(harness.close);
-
-      final today = dom.formatCalendarDay(DateTime.now());
-
-      await _pumpTodoPage(tester, harness);
-
-      // ① 切收集箱视图并新增（date=NULL，§5.5⑩）。
-      await tester.tap(find.text('收集箱'));
-      await tester.pump();
+      // ① 收集箱新增（date=NULL，§5.5⑩）。
       await tester.enterText(find.byKey(todoInputKey), '随手记的想法');
       await tester.tap(find.byKey(todoAddKey));
       await _pumpUntilDb(
@@ -208,11 +152,19 @@ void main() {
       final inboxTodo = (await _allTodos(harness))
           .firstWhere((t) => t.title == '随手记的想法');
       expect(inboxTodo.date, isNull);
+      expect(inboxTodo.doneAt, isNull);
+      expect(inboxTodo.deletedAt, isNull);
+      expect(inboxTodo.hlc, isNotEmpty);
+      // 瓦片渲染 + 行级操作入口齐备（勾选/编辑/删除/加入今日）。
+      await _pumpUntilFound(tester, find.text('随手记的想法'));
+      expect(find.byKey(todoMoveTodayKey(inboxTodo.id)), findsOneWidget);
+      expect(find.byKey(todoDeleteKey(inboxTodo.id)), findsOneWidget);
 
       // ② 收集箱不进任何日投影（§5.5⑩/§5.6）：今日投影行尚不存在。
       expect(await _summaryFor(harness, today), isNull);
 
-      // ③「加入今日」→ 回填计划日 → 投影 todo_total=1。
+      // ③「加入今日」→ 回填计划日 → 投影 todo_total=1；加入后该行退出
+      //    收集箱流（date 非 NULL，§5.5⑩）。
       await tester.tap(find.byKey(todoMoveTodayKey(inboxTodo.id)));
       await _pumpUntilDb(
         tester,
@@ -221,18 +173,7 @@ void main() {
                 .any((t) => t.id == inboxTodo.id && t.date == today) &&
             (await _summaryFor(harness, today))?.todoTotal == 1,
       );
-
-      // ④ 勾选 → 投影 todo_done=1。加入今日后收集箱不再持有该项
-      // （date 非 NULL 出收集箱流，§5.5⑩），切回今日视图勾选；切档后
-      // 待办流异步重投，轮询等瓦片渲染完成再点勾选框。
-      await tester.tap(find.text('今日待办'));
-      await _pumpUntilFound(tester, find.byKey(todoCheckKey(inboxTodo.id)));
-      await tester.tap(find.byKey(todoCheckKey(inboxTodo.id)));
-      await _pumpUntilDb(
-        tester,
-        () async =>
-            (await _summaryFor(harness, today))?.todoDone == 1,
-      );
+      await _pumpUntilFound(tester, find.textContaining('收集箱为空'));
     },
   );
 }

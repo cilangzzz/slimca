@@ -136,6 +136,24 @@
 
 - DeepSeek 通道打通（deepseek-flash）+ 真实冒烟测试。
 
+## V1 UX 插曲 · 大厂规范重设计（d6650f8 + 本批实现收口）
+
+- 组件约束与动效体系化：新增间距尺度/触碰目标/状态层/展开收起曲线对 token
+  （全部取 M3 官方刻度，不破坏既有 MotionConfig 与三层 token 架构）；
+  spring_sheet 重写对齐规范；notch bar 壳层测试、cookie FAB 形状组件入库。
+- 抽屉统一尺寸纪律：capture_sheet_uniform_size_test + plan_sheet_sizing——
+  抽屉高度不随内容缩放、主 CTA 钉底、单一功能入口（§7 UI 口径）。
+- 确认卡重构：capture_confirm_stage 阶段组件化 + capture_error_text；移除
+  recent_chips（单一入口纪律）。
+- AI 服务设置页：用户运行期自设凭据（settings 表本地件、永不同步、默认空=
+  离线解析桩）；dart-define 降为首次开发联调回退。
+- 首页日历去「固定七天」；菜单页重设计，「升级计划」整块移除 UI（IAP 代码
+  保留不露出）。
+- 架构收敛：plan_hub/fitness_workout_page/rest_timer/savings_service 等冗余
+  层删除，训练流归一 workout_session_controller。
+- 文档体系：CLAUDE.md + .claude/docs 11 模块技术文档（README/pitfalls/
+  CHANGELOG）；设计侧《大厂设计规范》《UI-规范与重设计》定稿。
+
 ## 测试基线（W9-10 收官时点）
 
 flutter analyze 全仓 0 issues；flutter test 逐包全绿：

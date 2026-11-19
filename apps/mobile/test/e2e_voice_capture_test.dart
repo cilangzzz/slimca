@@ -18,6 +18,8 @@ import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
 import 'package:feature_capture/feature_capture.dart'
     show captureGatewayProvider, captureParserProvider, createCaptureGateway;
+import 'package:feature_plan/feature_plan.dart'
+    show createPlanGateway, planGatewayProvider;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -116,12 +118,16 @@ void main() {
           speechTranscriberProvider.overrideWithValue(
             FakeTranscriber(transcripts: ['午餐牛肉面 500kcal 花了18']),
           ),
+          planGatewayProvider.overrideWithValue(
+            createPlanGateway(db: database, clock: clock),
+          ),
         ],
         child: const SlimcaApp(),
       ),
     );
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('Slimca'), findsOneWidget);
+    expect(find.text('Slimca'), findsNothing,
+        reason: '完整壳已起（首页 AppBar 无产品名标题，用户拍板移除）');
 
     // ── 唤起通道抽屉并切「说」段（§3.3）────────────────────────────
     await tester.tap(find.byType(FloatingActionButton));
